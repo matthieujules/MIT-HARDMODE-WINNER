@@ -1,0 +1,65 @@
+# Mirror — The Desk Companion
+# Encouraging, warm. The one the user talks to face-to-face.
+
+device_id: mirror
+device_name: Mirror
+device_type: companion
+
+network:
+  ip: "192.168.1.102"        # UPDATE with actual Pi IP
+  ssh_user: pi
+  master_url: "http://192.168.1.10:8000"
+
+hardware:
+  servos:
+    type: pca9685_i2c
+    i2c_address: 0x40
+    channels:
+      tilt: 0                 # Single servo — tilt the mirror face
+    servo_range:
+      min_pulse: 500
+      max_pulse: 2400
+      min_angle: 0
+      max_angle: 180
+    default_positions:
+      tilt: 90
+
+  camera:
+    type: usb
+    device: "/dev/video0"
+    resolution: [640, 480]
+
+  microphone:
+    type: usb
+    device: null
+
+  speaker:
+    enabled: true
+    type: usb                 # "usb" or "i2s"
+    # i2s_pins:               # Uncomment if using I2S
+    #   bclk: 18
+    #   lrclk: 19
+    #   data: 21
+
+capabilities:
+  - see
+  - hear
+  - speak
+  - move_tilt
+
+actions:
+  speak:
+    description: "Say something to the user through TTS"
+    params: {message: str}
+  tilt:
+    description: "Tilt the mirror face up or down"
+    params: {angle: int}
+  nod:
+    description: "Nod the mirror (agreement)"
+    params: {speed: "slow|normal|fast"}
+  look_up:
+    description: "Tilt up to face the user"
+    params: {}
+  look_down:
+    description: "Tilt down (shy/thinking)"
+    params: {}

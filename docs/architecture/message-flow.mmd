@@ -1,0 +1,83 @@
+sequenceDiagram
+    participant U as User
+    participant M as Mirror runtime
+    participant C as Control plane
+    participant X as Master model<br/>(Claude Sonnet 4.6)
+    participant V as Vision-capable device
+    participant L as Luxo runtime
+    participant LA as Luxo agent<br/>(Qwen via Cerebras/Groq)
+    participant H as Chef runtime
+    participant HA as Chef agent<br/>(Qwen via Cerebras/Groq)
+    participant MA as Mirror agent<br/>(Qwen via Cerebras/Groq)
+
+    Note over U,HA: DETERMINISTIC COMMAND (no model on either side)
+    U->>M: "Luxo blue"
+    M->>M: VAD + Whisper
+    M->>C: DeviceEvent(kind=transcript)
+    C->>C: deterministic route: match
+    C-->>L: command: set_color blue
+    L->>L: direct command handler (no model)
+    L->>L: execute hardware
+    L-->>C: action_result
+
+    Note over U,HA: REASONING PATH (two-tier model)
+    U->>M: "I need to lock in"
+    M->>M: VAD + Whisper
+    M->>C: DeviceEvent(kind=transcript)
+    C->>C: router: no deterministic match
+    C->>X: assembled prompt + tools
+    X-->>C: tool_use: update_user_state + spawn_luxo + spawn_chef + spawn_mirror
+    C->>C: persist state.json
+
+    par Master dispatches NL intents to devices
+        C-->>L: spawn: "Set a deep focus scene - dim blue light, slow calm breathing pattern"
+        C-->>H: spawn: "Bring a glass of water, say 'staying hydrated for the grind'"
+        C-->>M: spawn: "Say something encouraging about locking in"
+    end
+
+    Note over L,LA: Device agent loops (parallel)
+    L->>LA: SOUL.md + HW tools + sensors + instruction
+    LA->>LA: plan: set_color(blue, brightness=40), animate(breathe, slow)
+    LA-->>L: tool calls
+    L->>L: execute hardware
+    LA->>LA: check: done
+    L-->>C: action_result
+
+    H->>HA: SOUL.md + HW tools + sensors + instruction
+    HA->>HA: plan: drive_to(desk), extend_tray, speak(msg)
+    HA-->>H: tool calls
+    H->>H: execute hardware
+    HA->>HA: check: done
+    H-->>C: action_result
+
+    M->>MA: SOUL.md + HW tools + sensors + instruction
+    MA->>MA: plan: speak(encouragement)
+    MA-->>M: tool calls
+    M->>M: execute hardware
+    MA->>MA: check: done
+    M-->>C: action_result
+
+    Note over U,HA: VISION PATH
+    V->>V: motion gate + frame capture
+    V->>C: DeviceEvent(kind=frame, image_b64)
+    C->>C: vision.py: Claude Vision analysis
+    C->>C: significant mood change detected
+    C->>C: enqueue vision_result event
+    C->>X: vision_result + state + recent context
+    X-->>C: tool_use: update_user_state + spawn_luxo + spawn_mirror
+    C->>C: persist state.json
+
+    par Master dispatches NL intents
+        C-->>L: spawn: "Shift to warm relaxing light, gentle sway"
+        C-->>M: spawn: "Suggest taking a break, sound caring"
+    end
+
+    L->>LA: SOUL.md + HW tools + sensors + instruction
+    LA-->>L: tool calls
+    L->>L: execute hardware
+    L-->>C: action_result
+
+    M->>MA: SOUL.md + HW tools + sensors + instruction
+    MA-->>M: tool calls
+    M->>M: execute hardware
+    M-->>C: action_result

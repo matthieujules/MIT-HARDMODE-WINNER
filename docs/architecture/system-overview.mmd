@@ -1,0 +1,104 @@
+graph TB
+    subgraph USER["USER"]
+        voice["Voice"]
+        presence["Presence / behavior"]
+    end
+
+    subgraph LAPTOP["LAPTOP CONTROL PLANE"]
+        api["FastAPI app<br/>HTTP + WebSocket"]
+        router["Deterministic router<br/>simple direct commands"]
+        master["Master model<br/>Claude Sonnet 4.6<br/>(reasoning tier)"]
+        vision["Centralized vision<br/>Claude Vision"]
+        state["State store<br/>data/user.md + devices.json<br/>state.json + event_log.jsonl"]
+    end
+
+    subgraph DEVICES["DEVICE LAYER (Raspberry Pis)"]
+        subgraph MIRROR["Mirror"]
+            mirror_io["Primary mic + speaker<br/>Optional camera"]
+            subgraph mirror_stack["Device Runtime"]
+                mirror_reflex["Reflex layer<br/>instant safety preempts"]
+                mirror_direct["Direct command handler<br/>no model, immediate HW"]
+                mirror_agent["Agent loop<br/>Qwen via Cerebras/Groq<br/>(fast model tier)"]
+            end
+            mirror_hw["Tilt servo<br/>Speaker"]
+        end
+
+        subgraph LUXO["Luxo"]
+            luxo_io["Optional camera"]
+            subgraph luxo_stack["Device Runtime"]
+                luxo_reflex["Reflex layer<br/>instant safety preempts"]
+                luxo_direct["Direct command handler<br/>no model, immediate HW"]
+                luxo_agent["Agent loop<br/>Qwen via Cerebras/Groq<br/>(fast model tier)"]
+            end
+            luxo_hw["RGB LED<br/>Servos"]
+        end
+
+        subgraph CHEF["Chef"]
+            subgraph chef_stack["Device Runtime"]
+                chef_reflex["Reflex layer<br/>instant safety preempts"]
+                chef_direct["Direct command handler<br/>no model, immediate HW"]
+                chef_agent["Agent loop<br/>Qwen via Cerebras/Groq<br/>(fast model tier)"]
+            end
+            chef_hw["Mobile base<br/>Tray<br/>Speaker"]
+        end
+
+        subgraph PURSE["Purse"]
+            subgraph purse_stack["Device Runtime"]
+                purse_reflex["Reflex layer<br/>instant safety preempts"]
+                purse_direct["Direct command handler<br/>no model, immediate HW"]
+                purse_agent["Agent loop<br/>Qwen via Cerebras/Groq<br/>(fast model tier)"]
+            end
+            purse_hw["Mobile base<br/>Speaker"]
+        end
+    end
+
+    voice --> mirror_io
+    presence --> luxo_io
+    presence --> mirror_io
+
+    mirror_io --> mirror_reflex
+    luxo_io --> luxo_reflex
+
+    mirror_reflex --> mirror_direct
+    mirror_reflex --> mirror_agent
+    luxo_reflex --> luxo_direct
+    luxo_reflex --> luxo_agent
+    chef_reflex --> chef_direct
+    chef_reflex --> chef_agent
+    purse_reflex --> purse_direct
+    purse_reflex --> purse_agent
+
+    mirror_stack --> api
+    luxo_stack --> api
+    chef_stack --> api
+    purse_stack --> api
+
+    api --> router
+    api --> vision
+    router -->|"no match"| master
+
+    router -->|"direct command"| api
+    vision -->|"vision_result"| master
+    vision --> state
+    master --> state
+    state --> master
+    api --> state
+
+    api -->|"command (deterministic)"| mirror_direct
+    api -->|"command (deterministic)"| luxo_direct
+    api -->|"command (deterministic)"| chef_direct
+    api -->|"command (deterministic)"| purse_direct
+
+    api -->|"spawn (NL intent)"| mirror_agent
+    api -->|"spawn (NL intent)"| luxo_agent
+    api -->|"spawn (NL intent)"| chef_agent
+    api -->|"spawn (NL intent)"| purse_agent
+
+    mirror_direct --> mirror_hw
+    mirror_agent --> mirror_hw
+    luxo_direct --> luxo_hw
+    luxo_agent --> luxo_hw
+    chef_direct --> chef_hw
+    chef_agent --> chef_hw
+    purse_direct --> purse_hw
+    purse_agent --> purse_hw

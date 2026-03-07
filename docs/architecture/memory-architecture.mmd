@@ -1,0 +1,53 @@
+graph TB
+    subgraph STABLE["STABLE FILES (disk)"]
+        user["data/user.md<br/>preferences, habits, tone"]
+        devices["devices.json<br/>device registry + capabilities"]
+        master_soul["control_plane/SOUL.md<br/>home personality"]
+        device_souls["devices/*/SOUL.md<br/>device personalities"]
+    end
+
+    subgraph RUNTIME["RUNTIME FILES (disk)"]
+        state["state.json<br/>current mode, mood,<br/>energy, overrides"]
+        events["event_log.jsonl<br/>bounded recent raw events"]
+    end
+
+    subgraph MASTER_TURN["MASTER PROMPT ASSEMBLY (per turn, laptop)"]
+        m_current["Current triggering event"]
+        m_prompt["Master prompt<br/>SOUL + USER + devices +<br/>state + recent events +<br/>current event"]
+        m_model["Claude Sonnet 4.6"]
+    end
+
+    subgraph DEVICE_TURN["DEVICE AGENT PROMPT ASSEMBLY (per spawn, on device)"]
+        d_soul["Device SOUL.md<br/>personality + character"]
+        d_tools["Hardware tool definitions<br/>available actions for this device"]
+        d_sensors["Sensor state<br/>current readings + context"]
+        d_instruction["Master instruction<br/>NL intent from spawn message"]
+        d_prompt["Device agent prompt<br/>SOUL + tools + sensors +<br/>instruction"]
+        d_model["Qwen via Cerebras/Groq"]
+    end
+
+    subgraph MAINT["MAINTENANCE"]
+        summarize["Summarize old events<br/>into state.json"]
+    end
+
+    %% Master prompt assembly
+    user --> m_prompt
+    devices --> m_prompt
+    master_soul --> m_prompt
+    device_souls --> m_prompt
+    state --> m_prompt
+    events --> m_prompt
+    m_current --> m_prompt
+    m_prompt --> m_model
+
+    %% Device agent prompt assembly
+    device_souls --> d_soul
+    d_soul --> d_prompt
+    d_tools --> d_prompt
+    d_sensors --> d_prompt
+    d_instruction --> d_prompt
+    d_prompt --> d_model
+
+    %% Maintenance
+    events --> summarize
+    summarize --> state

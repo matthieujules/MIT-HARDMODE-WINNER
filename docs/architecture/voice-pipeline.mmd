@@ -1,0 +1,48 @@
+graph LR
+    subgraph DEVICE["MIRROR VOICE PATH"]
+        mic["Microphone"]
+        vad["VAD"]
+        stt["Whisper transcription"]
+        transcript["Transcript event"]
+    end
+
+    subgraph CONTROL["LAPTOP CONTROL PLANE"]
+        api["WebSocket receiver"]
+        route["Deterministic router"]
+        master["Master model<br/>Claude Sonnet 4.6"]
+    end
+
+    subgraph DIRECT["DIRECT COMMAND PATH (no model)"]
+        cmd_direct["command message<br/>via WebSocket"]
+        direct_handler["Direct command handler<br/>immediate hardware exec"]
+        direct_hw["Hardware action"]
+    end
+
+    subgraph AGENT["AGENT LOOP PATH (fast model)"]
+        cmd_spawn["spawn message<br/>NL intent via WebSocket"]
+        agent_loop["Device agent loop<br/>Qwen via Cerebras/Groq"]
+        agent_tools["Hardware tool calls"]
+        agent_check["Check: done?"]
+        agent_hw["Hardware action"]
+        agent_result["action_result"]
+    end
+
+    mic --> vad
+    vad --> stt
+    stt --> transcript
+    transcript --> api
+    api --> route
+    route -->|"simple single-device command"| cmd_direct
+    route -->|"ambiguous or multi-device"| master
+    master -->|"spawn NL intent"| cmd_spawn
+
+    cmd_direct --> direct_handler
+    direct_handler --> direct_hw
+
+    cmd_spawn --> agent_loop
+    agent_loop --> agent_tools
+    agent_tools --> agent_hw
+    agent_hw --> agent_check
+    agent_check -->|"not done"| agent_loop
+    agent_check -->|"done"| agent_result
+    agent_result --> api
