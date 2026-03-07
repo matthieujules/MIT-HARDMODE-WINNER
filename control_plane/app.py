@@ -5,6 +5,8 @@ Endpoints, WebSocket ConnectionManager, and event processing pipeline.
 
 import asyncio
 import logging
+import time
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -224,27 +226,60 @@ async def _run_master_reasoning(event: DeviceEvent) -> dict:
     7. Sequential dispatch to same device
     """
     try:
-        tool_calls = execute_master_turn(state_manager, event)
+        result = execute_master_turn(state_manager, event)
     except Exception as e:
         logger.error("Master reasoning failed: %s", e)
+        # Log the failure
+        state_manager.append_master_log({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "trigger": event.model_dump(mode="json"),
+            "error": str(e),
+            "outcome": "error",
+        })
         return {"status": "error", "detail": f"master reasoning error: {e}"}
 
+    tool_calls = result["tool_calls"]
+    meta = result["turn_metadata"]
+
     if not tool_calls:
+        state_manager.append_master_log({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **meta,
+            "outcome": "empty",
+            "dispatches": [],
+        })
         return {"status": "ok", "detail": "master returned no actions"}
 
     # Check for no_op
-    if len(tool_calls) == 1 and tool_calls[0]["tool"] == "no_op":
+    if meta["is_no_op"]:
         reason = tool_calls[0]["input"].get("reason", "no reason")
         logger.info("Master no_op: %s", reason)
+        state_manager.append_master_log({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **meta,
+            "tool_calls": tool_calls,
+            "outcome": "no_op",
+            "no_op_reason": reason,
+            "dispatches": [],
+        })
         return {"status": "ok", "detail": f"no_op: {reason}"}
 
     # Step 3-4: Apply state updates and persist before dispatch
     apply_state_update(state_manager, tool_calls)
+    state_after = state_manager.read_state()
 
     # Step 5-7: Extract and dispatch device instructions
     instructions = extract_device_instructions(tool_calls)
 
     if not instructions:
+        state_manager.append_master_log({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **meta,
+            "tool_calls": tool_calls,
+            "state_after": state_after,
+            "outcome": "state_update_only",
+            "dispatches": [],
+        })
         return {"status": "ok", "detail": "master updated state only", "tool_calls": len(tool_calls)}
 
     # Group instructions by device for sequential ordering per device
@@ -253,6 +288,8 @@ async def _run_master_reasoning(event: DeviceEvent) -> dict:
         device_queues.setdefault(device_id, []).append(instruction)
 
     # Dispatch: parallel across devices, sequential within same device
+    dispatch_log: list[dict] = []
+
     async def _dispatch_device_queue(device_id: str, queue: list[str]) -> list[dict]:
         results = []
         for instruction in queue:
@@ -260,6 +297,7 @@ async def _run_master_reasoning(event: DeviceEvent) -> dict:
             # Set voice lock for speaking devices
             if device_id in _SPEAKING_DEVICES:
                 set_voice_lock(device_id, state_manager)
+            dispatch_log.append({"device": device_id, "instruction": instruction, "result": result})
             results.append(result)
         return results
 
@@ -273,6 +311,16 @@ async def _run_master_reasoning(event: DeviceEvent) -> dict:
     for device_id, result in zip(device_queues.keys(), dispatch_results):
         if isinstance(result, Exception):
             logger.error("Dispatch to %s failed: %s", device_id, result)
+
+    # Write full master turn log
+    state_manager.append_master_log({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **meta,
+        "tool_calls": tool_calls,
+        "state_after": state_after,
+        "outcome": "dispatch",
+        "dispatches": dispatch_log,
+    })
 
     return {
         "status": "ok",
@@ -351,3 +399,8 @@ async def get_devices():
 @app.get("/events")
 async def get_events():
     return state_manager.read_recent_events()
+
+
+@app.get("/master-log")
+async def get_master_log(limit: int = 50):
+    return state_manager.read_master_log(limit=limit)

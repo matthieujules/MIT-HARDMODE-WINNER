@@ -140,6 +140,21 @@ class StateManager:
             self._event_log_path.write_text("\n".join(kept) + "\n")
             logger.info("Event log compacted: %d -> %d lines", len(lines), max_lines)
 
+    # ── Master log (master_log.jsonl) ─────────────────────────────
+
+    def append_master_log(self, entry: dict) -> None:
+        path = self._data_dir / "master_log.jsonl"
+        with self._lock:
+            with path.open("a") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+
+    def read_master_log(self, limit: int = 50) -> list[dict]:
+        path = self._data_dir / "master_log.jsonl"
+        if not path.exists():
+            return []
+        lines = path.read_text().strip().splitlines()
+        return [json.loads(l) for l in lines[-limit:]]
+
     # ── User profile ───────────────────────────────────────────────
 
     def read_user_md(self) -> str:

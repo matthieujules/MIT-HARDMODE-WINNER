@@ -7,6 +7,7 @@ Takes a StateManager and DeviceEvent, returns structured data.
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -202,7 +203,7 @@ def assemble_prompt(state_manager: StateManager, triggering_event: DeviceEvent) 
 
 # ── API call ──────────────────────────────────────────────────────
 
-_MODEL = "claude-opus-4-6"
+_MODEL = os.getenv("MASTER_MODEL", "claude-sonnet-4-6")
 _BETA_HEADER = "context-1m-2025-08-07"
 
 
@@ -298,7 +299,7 @@ def extract_device_instructions(tool_calls: list[dict]) -> list[tuple[str, str]]
 # ── Full master turn orchestration ────────────────────────────────
 
 
-def execute_master_turn(state_manager: StateManager, event: DeviceEvent) -> list[dict]:
+def execute_master_turn(state_manager: StateManager, event: DeviceEvent) -> dict:
     """Orchestrate a full master reasoning turn.
 
     Per spec §19 Execution Semantics:
@@ -307,26 +308,53 @@ def execute_master_turn(state_manager: StateManager, event: DeviceEvent) -> list
     3-4. Apply state updates and persist (done by caller via apply_state_update).
     5-7. Device instructions extracted (dispatch done by app.py).
 
-    Returns the validated tool_calls list.
+    Returns a dict with tool_calls and full turn metadata for logging.
     """
+    # Snapshot state before the call
+    state_before = state_manager.read_state()
+
     # Assemble prompt
     prompt = assemble_prompt(state_manager, event)
 
-    # Call master model
+    # Call master model with timing
+    t0 = time.time()
     response = call_master(prompt)
+    latency_ms = round((time.time() - t0) * 1000)
+
+    # Extract raw content blocks for interpretability
+    raw_content = []
+    for block in response.content:
+        if block.type == "text":
+            raw_content.append({"type": "text", "text": block.text})
+        elif block.type == "tool_use":
+            raw_content.append({"type": "tool_use", "name": block.name, "input": block.input, "id": block.id})
 
     # Parse and validate
     tool_calls = parse_tool_calls(response)
 
+    is_no_op = False
     if not tool_calls:
         logger.warning("Master returned no valid tool calls")
-        return []
+        tool_calls = []
+    else:
+        no_ops = [tc for tc in tool_calls if tc["tool"] == "no_op"]
+        if no_ops:
+            reason = no_ops[0]["input"].get("reason", "no reason given")
+            logger.info("Master decided no_op: %s", reason)
+            tool_calls = [no_ops[0]]
+            is_no_op = True
 
-    # Check for no_op (must be only call)
-    no_ops = [tc for tc in tool_calls if tc["tool"] == "no_op"]
-    if no_ops:
-        reason = no_ops[0]["input"].get("reason", "no reason given")
-        logger.info("Master decided no_op: %s", reason)
-        return [no_ops[0]]
-
-    return tool_calls
+    return {
+        "tool_calls": tool_calls,
+        "turn_metadata": {
+            "trigger": event.model_dump(mode="json"),
+            "state_before": state_before,
+            "model": _MODEL,
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+            "latency_ms": latency_ms,
+            "stop_reason": response.stop_reason,
+            "raw_content": raw_content,
+            "is_no_op": is_no_op,
+        },
+    }
