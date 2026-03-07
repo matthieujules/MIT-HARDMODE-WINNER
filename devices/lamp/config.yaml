@@ -6,9 +6,9 @@ device_name: Lamp
 device_type: lamp
 
 network:
-  ip: "192.168.1.101"        # UPDATE with actual Pi IP
+  tailscale_hostname: lamp-pi
   ssh_user: pi
-  master_url: "http://192.168.1.10:8000"  # UPDATE with master laptop IP
+  master_url: "http://claude-master:8000"
 
 hardware:
   led:
