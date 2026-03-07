@@ -262,6 +262,12 @@ def run_voice_capture(backend: str, cp_url: str):
     import torch
     import sounddevice as sd
 
+    if backend == "groq" and not os.environ.get("GROQ_API_KEY"):
+        logger.error("GROQ_API_KEY is not set or empty. Set it in .env or environment:")
+        logger.error("  export GROQ_API_KEY=gsk_...")
+        logger.error("  or add GROQ_API_KEY=gsk_... to .env")
+        sys.exit(1)
+
     transcribe = transcribe_groq if backend == "groq" else transcribe_local
 
     # Load VAD
@@ -362,6 +368,9 @@ def run_voice_capture(backend: str, cp_url: str):
 
 
 def main():
+    from dotenv import load_dotenv
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="ClaudeHome voice capture service")
     parser.add_argument(
         "--backend",
