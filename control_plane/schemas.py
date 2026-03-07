@@ -77,7 +77,7 @@ class DeviceSpawn(BaseModel):
     instruction: str
     request_id: str
     max_iterations: int = 10
-    time_budget_ms: int = 15000
+    time_budget_ms: int = 30000
 
 
 # ── Device registry ───────────────────────────────────────────────

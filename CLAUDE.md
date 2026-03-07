@@ -28,11 +28,23 @@ Only the `.mmd` sources are tracked. Rendered exports should be treated as dispo
 |------|---------|
 | `control_plane/schemas.py` | Pydantic v2 models for all protocol messages |
 | `control_plane/state.py` | File-backed state persistence (state.json, devices.json, event_log.jsonl, master_log.jsonl) |
-| `control_plane/router.py` | Deterministic command router, emergency stop, voice lock |
-| `control_plane/app.py` | FastAPI app: endpoints, WebSocket ConnectionManager, event pipeline |
+| `control_plane/router.py` | Emergency stop + voice lock helpers (deterministic routing removed) |
+| `control_plane/app.py` | FastAPI app: endpoints, WebSocket ConnectionManager, transcript debouncer, event pipeline |
 | `control_plane/master.py` | Master reasoning engine (multi-provider: Anthropic + Cerebras) |
-| `control_plane/SOUL.md` | Master home personality and tool-use rules |
+| `control_plane/SOUL.md` | Master home personality, multi-person rules, tool-use rules |
 | `requirements.txt` | Python dependencies |
+
+### Lamp Device Runtime (fully working, tested end-to-end)
+
+| File | Purpose |
+|------|---------|
+| `devices/lamp/main.py` | Entry point: `--connect` for WS runtime, CLI sim mode preserved |
+| `devices/lamp/ws_client.py` | WebSocket client: register, connect, heartbeat, auto-reconnect |
+| `devices/lamp/agent.py` | LLM agent loop (Cerebras gpt-oss-120b), tool execution, warmup |
+| `devices/lamp/hardware.py` | Hardware controller (SO-101 arm + RGB LED), sim mode |
+| `devices/lamp/planner.py` | Regex planner for direct commands (used by ws_client Layer 1) |
+
+Run: `cd devices/lamp && MASTER_URL="http://localhost:8000" python3 main.py --connect`
 
 ### Voice Pipeline (sidecar)
 
@@ -51,11 +63,14 @@ Run: `python3 -m voice.voice_service` (or `--test` for no-mic test mode, `--back
 
 Run: `python3 -m vision.vision_service` (or `--test`, `--calibrate`)
 
-### 2D Spatial Map (dashboard)
+### 2D Spatial Map + Dashboard (served at localhost:8000/)
 
 | File | Purpose |
 |------|---------|
-| `dashboard/map.js` | SVG room map with device icons, status indicators, rover animation, drag-to-calibrate |
+| `dashboard/map.js` | SVG room map, device icons, brain HUD terminal, device panels, rover animation |
+| `dashboard/timeline.js` | Event/dispatch feed, generates overlay data for map.js |
+| `dashboard/styles.css` | Dark theme, brain HUD, device panel cards, animations |
+| `dashboard/index.html` | Full-viewport layout, polling loop, transcript input |
 | `control_plane/spatial.py` | Spatial state management, deep_merge, waypoint resolution |
 | `data/room.json` | Static room config (500×400cm, furniture, anchors, waypoints) |
 
@@ -72,36 +87,45 @@ All device configs (`devices/*/config.yaml`) use Tailscale hostnames:
 # 1. Install deps
 pip3 install -r requirements.txt
 
-# 2. Ensure .env has ANTHROPIC_API_KEY set
+# 2. Ensure .env has ANTHROPIC_API_KEY and CEREBRAS_API_KEY set
 
-# 3. Start the server
+# 3. Start the control plane
 python3 -m uvicorn control_plane.app:app --host 0.0.0.0 --port 8000
 
-# 4. Register devices
+# 4. Start the lamp (in a separate terminal)
+cd devices/lamp && MASTER_URL="http://localhost:8000" python3 main.py --connect
+# Lamp auto-registers, connects via WebSocket, warms up LLM on boot
+
+# 5. Register other devices (no runtime yet, but master can reason about them)
 curl -X POST localhost:8000/register -H 'Content-Type: application/json' \
-  -d '{"device_id":"lamp","device_name":"Lamp","device_type":"lamp","capabilities":["light","move_head","emote"],"actions":["set_color","set_brightness"],"ip":"lamp-pi"}'
-# Repeat for mirror, radio, rover (see test scripts in BUILD_PLAN.md)
+  -d '{"device_id":"mirror","device_name":"Mirror","device_type":"companion","capabilities":["see","display_image","move_tilt"],"actions":["display_image","tilt","nod"],"ip":"mirror-pi"}'
 
-# 5. Test deterministic routing
+# 6. Test master reasoning (all transcripts go to master, no deterministic routing)
 curl -X POST localhost:8000/events -H 'Content-Type: application/json' \
-  -d '{"device_id":"global_mic","kind":"transcript","event_kind":"transcript","payload":{"text":"lamp blue"}}'
+  -d '{"device_id":"global_mic","kind":"transcript","payload":{"text":"I need to lock in"}}'
+# Note: transcript is buffered for 1.5s by debouncer, then master fires async
 
-# 6. Test master reasoning (requires ANTHROPIC_API_KEY)
-curl -X POST localhost:8000/events -H 'Content-Type: application/json' \
-  -d '{"device_id":"global_mic","kind":"transcript","event_kind":"transcript","payload":{"text":"I need to lock in"}}'
-
-# 7. Check results
+# 7. Check results (wait 3-15s for master reasoning + lamp LLM agent loop)
 curl localhost:8000/state        # Current home state
 curl localhost:8000/devices      # Registered devices
 curl localhost:8000/events       # Recent event log
-curl localhost:8000/master-log   # Full master reasoning history
+curl localhost:8000/master-log   # Master reasoning + device results
+
+# 8. Open dashboard
+open http://localhost:8000       # Full-viewport room map with live device status
 ```
 
-### Master Model Config (in `.env`)
+### Model Config (in `.env`)
 
 ```bash
+# Master (control plane)
 MASTER_MODEL=claude-sonnet-4-6   # Default. Options: claude-opus-4-6, gpt-oss-120b
 MASTER_PROVIDER=auto             # auto-detects from model name. Options: anthropic, cerebras
+
+# Device agents (lamp, mirror)
+CEREBRAS_API_KEY=csk-...         # REQUIRED for lamp/mirror LLM agent loops
+LAMP_AGENT_MODEL=gpt-oss-120b   # Default. Cerebras model for lamp agent
+MIRROR_CEREBRAS_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 ```
 
 ### Data Files (gitignored, in `data/`)
@@ -113,7 +137,7 @@ MASTER_PROVIDER=auto             # auto-detects from model name. Options: anthro
 
 ## What's Not Built Yet
 
-- **Device-side runtimes** — Pi code: WebSocket client, hardware drivers, device agent loop
+- **Mirror/Radio/Rover runtimes** — Lamp runtime is the template; other devices need their own
 - **TTS** — ElevenLabs/Piper integration for Mirror and Radio
 - **Tick scheduler** — periodic tick event generator (currently manual via curl)
 
@@ -126,14 +150,15 @@ MASTER_PROVIDER=auto             # auto-detects from model name. Options: anthro
 - Claude Vision called centrally from the laptop (wired, triggers on people_count change only)
 - Silero VAD + Groq Whisper sidecar for voice capture
 - Voice events preempt vision-triggered master turns (cancellation + lock release)
-- Simple device runtimes on Raspberry Pis (not yet built)
+- Lamp runtime on laptop (Cerebras gpt-oss-120b agent loop, tested end-to-end)
+- Other device runtimes not yet built
 
 ## Design Principles
 
 - Optimize for demo reliability over theoretical elegance.
 - Keep one shared brain on the laptop.
-- Use deterministic routing for simple commands.
-- Reserve LLM reasoning for ambiguous or multi-device requests.
+- All transcripts go to master reasoning (no deterministic routing).
+- No silent fallbacks — fail loud or don't fail.
 - Keep master execution serial.
 - Keep state explicit and file-backed.
 - Prefer a few strong sensing surfaces over weak sensing everywhere.
@@ -141,12 +166,17 @@ MASTER_PROVIDER=auto             # auto-detects from model name. Options: anthro
 ## Gotchas (learned the hard way)
 
 - **`state.update()` is shallow** — nested dicts like `spatial` get wiped. Always use `deep_merge` from `spatial.py`.
-- **`load_dotenv()` must run before `import master`** — master reads env vars at import time for model config.
+- **`load_dotenv()` must run before `import master` or `import agent`** — both read env vars at import time for model config. Lamp's main.py loads from project root `.env`.
 - **Vision trigger: don't use mood** — too noisy/high-variance. Only `people_count` changes are reliable triggers.
 - **Snapshot state BEFORE writing updates** — if you write new state then compare for triggers, you compare new vs new (always equal). Snapshot first, write, then compare against snapshot.
 - **`asyncio.sleep(0)` is not enough after task cancellation** — if the cancelled task is deep in nested awaits, one yield may not release the lock. Poll `_master_lock.locked()` in a loop.
 - **`asyncio.to_thread` threads continue after cancellation** — cancelling the async wrapper raises `CancelledError` at the `await` point, but the thread keeps running. The result is just discarded. This is fine but be aware.
 - **`data/` is gitignored except `data/room.json`** — need `!data/room.json` in `.gitignore` and `git add -f` for new tracked files under `data/`.
+- **Cerebras cold start is 7-14s** — the lamp agent warms up the LLM connection on boot (`agent.warmup()`). Without this, the first real instruction takes 14s+ and may timeout. With warmup, subsequent calls are <500ms.
+- **`tool_choice="required"` on Cerebras** — without it, the model sometimes returns plain text JSON instead of calling the `done` tool, wasting a full iteration on a nudge message.
+- **Transcript debouncer buffers 1.5s** — test events via curl return "transcript buffered" immediately. Master reasoning fires async after the flush. Check master-log after 3-15s.
+- **Resetting state.json clears spatial positions** — if you wipe state, device positions disappear from the dashboard. Restore from room.json anchors.
+- **Emergency stop pattern is strict** — requires "stop stop", "stop all", "emergency stop", "freeze all", or "no no no". Single "stop" does NOT trigger it (was too sensitive with voice transcription).
 
 **Orchestrate, don't implement.** Delegate multi-file work to subagents (Task tool). Your context is for orchestration.
 

@@ -8,19 +8,14 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/dashboard/styles.css">
-  <!-- Three.js import map removed — replaced by 2D SVG room map -->
 </head>
 <body>
-  <div id="app">
+  <div id="app" style="position: relative; width: 100vw; height: 100vh; overflow: hidden;">
+    <div class="scene-container" id="scene-mount" style="position: absolute; inset: 0; overflow: hidden;"></div>
     <header class="topbar">
       <span class="topbar__brand">CLAUDEHOME</span>
       <div id="state-pills"></div>
     </header>
-    <div class="left-panel">
-      <div class="scene-container" id="scene-mount"></div>
-      <div class="device-grid" id="device-grid"></div>
-    </div>
-    <main class="timeline-panel" id="timeline"></main>
     <footer class="dock">
       <input class="dock__input" id="transcript-input" type="text" placeholder="Type a voice transcript..." autocomplete="off">
       <button class="dock__btn dock__btn--tick" id="btn-tick">TICK</button>
@@ -30,14 +25,12 @@
 
   <script type="module">
     import { initState, updateState } from '/dashboard/state.js';
-    import { initDevices, updateDevices } from '/dashboard/devices.js';
     import { initTimeline, updateTimeline } from '/dashboard/timeline.js';
     import { initMap, updateMap } from '/dashboard/map.js';
 
     // ── Init modules ──────────────────────────────────────────────
     initState(document.getElementById('state-pills'));
-    initDevices(document.getElementById('device-grid'));
-    initTimeline(document.getElementById('timeline'));
+    initTimeline(null);
 
     // initMap is async (fetches /room config)
 
@@ -54,6 +47,7 @@
     let lastStateData = null;
     let lastDevicesData = null;
     let lastRecentDispatches = [];
+    let lastOverlayData = null;
 
     // ── Polling loop ──────────────────────────────────────────────
     async function poll() {
@@ -73,15 +67,14 @@
         ]);
 
         updateState(stateData);
-        updateDevices(devicesData);
-        updateTimeline(eventsData, masterData, pendingDeterministic);
+        lastOverlayData = updateTimeline(eventsData, masterData, pendingDeterministic);
 
         lastStateData = stateData;
         lastDevicesData = devicesData;
         lastRecentDispatches = _recentDispatches(masterData);
 
         try {
-          updateMap(lastStateData, lastDevicesData, lastRecentDispatches);
+          updateMap(lastStateData, lastDevicesData, lastRecentDispatches, lastOverlayData);
         } catch (e) {
           // map updates are non-critical
         }
@@ -97,7 +90,7 @@
         const spatialRes = await fetch('/spatial');
         const spatialData = await spatialRes.json();
         lastStateData = { ...lastStateData, spatial: spatialData };
-        updateMap(lastStateData, lastDevicesData, lastRecentDispatches);
+        updateMap(lastStateData, lastDevicesData, lastRecentDispatches, lastOverlayData);
       } catch (e) {
         console.warn('Spatial poll failed:', e);
       }

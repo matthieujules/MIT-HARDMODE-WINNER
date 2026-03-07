@@ -20,12 +20,11 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
 from .master import apply_state_update, execute_master_turn, extract_device_instructions, extract_rover_targets
-from .spatial import resolve_target, update_device_activity
+from .spatial import merge_people_observations, resolve_target, update_device_activity
 from .router import (
     check_voice_lock,
     clear_voice_lock,
     is_emergency_stop,
-    route_transcript,
     set_voice_lock,
 )
 from .schemas import (
@@ -48,6 +47,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 state_manager = StateManager()
+
+
+class TranscriptDebouncer:
+    def __init__(self, flush_delay_s=1.5):
+        self.flush_delay_s = flush_delay_s
+        self.buffer = []
+        self.pending_handle = None
+
+    def add(self, text: str):
+        self.buffer.append(text)
+        if self.pending_handle is not None:
+            self.pending_handle.cancel()
+        self.pending_handle = asyncio.get_event_loop().call_later(
+            self.flush_delay_s, self._flush
+        )
+
+    def _flush(self):
+        self.pending_handle = None
+        if not self.buffer:
+            return
+        text = " ".join(self.buffer)
+        self.buffer = []
+        if check_voice_lock(state_manager):
+            logger.info("Buffered transcript dropped (voice lock active): %r", text)
+            return
+        event = DeviceEvent(
+            device_id="global_mic",
+            kind="transcript",
+            payload={"text": text},
+        )
+        global _active_master_task
+        state_manager.append_event(event)
+        _active_master_task = asyncio.create_task(_run_master_reasoning(event))
+
+    def cancel(self):
+        if self.pending_handle is not None:
+            self.pending_handle.cancel()
+            self.pending_handle = None
+        self.buffer = []
+
+
+_transcript_debouncer = TranscriptDebouncer()
 
 
 # ── ConnectionManager ──────────────────────────────────────────────
@@ -131,9 +172,12 @@ async def dispatch_spawn(device_id: str, instruction: str) -> dict:
 
 async def process_event(event: DeviceEvent) -> dict:
     """Route a DeviceEvent per the spec section 8 Event Routing Table."""
-    state_manager.append_event(event)
-
     kind = event.kind
+
+    # Don't log transcript fragments to event_log — the debouncer will log
+    # the joined transcript when it flushes, avoiding duplicates in master prompt.
+    if kind != "transcript":
+        state_manager.append_event(event)
 
     if kind == "transcript":
         return await _handle_transcript(event)
@@ -156,26 +200,24 @@ async def process_event(event: DeviceEvent) -> dict:
 
 async def _handle_transcript(event: DeviceEvent) -> dict:
     text = event.payload.get("text", "")
-    result = route_transcript(text, state_manager)
-    route_type = result[0]
+    if is_emergency_stop(text):
+        logger.info("Emergency stop triggered: %r", text)
+        _transcript_debouncer.cancel()
+        # Cancel any in-progress master reasoning task
+        if _active_master_task is not None and not _active_master_task.done():
+            _active_master_task.cancel()
+            logger.info("Cancelled in-progress master turn for emergency stop")
+        devices = state_manager.read_devices()
+        for device in devices:
+            await dispatch_command(device.device_id, "stop", {})
+        return {"status": "ok", "detail": "emergency stop broadcast to all devices"}
 
-    if route_type == "emergency_stop":
-        # Broadcast stop command to rover (the only mobile device)
-        await dispatch_command("rover", "stop", {})
-        return {"status": "ok", "detail": "emergency stop broadcast"}
-
-    elif route_type == "dropped":
+    if check_voice_lock(state_manager):
+        logger.info("Transcript dropped (voice lock active): %r", text)
         return {"status": "ok", "detail": "transcript dropped (voice lock active)"}
 
-    elif route_type == "deterministic":
-        _, device_id, action, params = result
-        send_result = await dispatch_command(device_id, action, params)
-        return {"status": "ok", "detail": f"deterministic: {device_id}.{action}", "dispatch": send_result}
-
-    elif route_type == "master":
-        return await _run_master_reasoning(event)
-
-    return {"status": "error", "detail": f"unexpected route type: {route_type}"}
+    _transcript_debouncer.add(text)
+    return {"status": "ok", "detail": "transcript buffered"}
 
 
 def _handle_action_result(event: DeviceEvent) -> dict:
@@ -258,25 +300,33 @@ async def _process_frame_background(source_device: str, image_b64: str) -> None:
 
         # Update state with vision results
         state_patch = {}
-        if "people_count" in analysis:
-            state_patch["people_count"] = analysis["people_count"]
         if "activity" in analysis:
             state_patch["activity"] = analysis["activity"]
         if "mood" in analysis and analysis.get("mood_confidence", 0) >= 0.7:
             state_patch["mood"] = analysis["mood"]
-        if state_patch:
-            state_manager.write_state(state_patch)
+        room_config = state_manager.read_room_config()
 
-        # Update user position from vision if available
-        user_pos = analysis.get("user_position")
-        if user_pos and "x_pct" in user_pos and "y_pct" in user_pos:
-            room_config = state_manager.read_room_config()
-            if room_config:
+        people_observations = analysis.get("people")
+        if isinstance(people_observations, list) and room_config:
+            previous_people = previous_state.get("spatial", {}).get("people", [])
+            tracked_people = merge_people_observations(previous_people, people_observations, room_config)
+            state_manager.update_spatial_people(tracked_people)
+            state_patch["people_count"] = len(tracked_people)
+        else:
+            if "people_count" in analysis:
+                state_patch["people_count"] = analysis["people_count"]
+
+            # Backward-compatible single-user update from vision
+            user_pos = analysis.get("user_position")
+            if user_pos and "x_pct" in user_pos and "y_pct" in user_pos and room_config:
                 x_cm = user_pos["x_pct"] / 100.0 * room_config.get("width_cm", 500)
                 y_cm = user_pos["y_pct"] / 100.0 * room_config.get("height_cm", 400)
                 state_manager.update_spatial_device("user", {
                     "x_cm": round(x_cm), "y_cm": round(y_cm), "source": "camera"
                 })
+
+        if state_patch:
+            state_manager.write_state(state_patch)
 
         # Trigger master only on meaningful scene changes (people entering/leaving)
         if should_trigger_master(analysis, previous_state):
@@ -303,6 +353,9 @@ _master_lock = asyncio.Lock()
 
 # Track active vision background task so voice events can preempt it
 _active_vision_task: asyncio.Task | None = None
+
+# Track active master reasoning task so e-stop can cancel it
+_active_master_task: asyncio.Task | None = None
 
 # Devices that trigger voice lock when receiving spawn instructions
 _SPEAKING_DEVICES = {"mirror", "radio"}
@@ -573,8 +626,15 @@ async def calibrate_position(body: dict):
 async def spatial_observe(body: dict):
     """Camera-based spatial position update.
 
-    Body: {"device_id": "rover", "x_cm": N, "y_cm": N, "theta_deg": N, "confidence": 0.9, "source": "camera"}
+    Body:
+      {"device_id": "rover", "x_cm": N, "y_cm": N, "theta_deg": N, "confidence": 0.9, "source": "camera"}
+    or
+      {"people": [{"id": "sally", "label": "Sally", "role": "primary", "x_cm": N, "y_cm": N}]}
     """
+    if isinstance(body.get("people"), list):
+        state_manager.update_spatial_people(body["people"])
+        return {"status": "ok", "people_tracked": len(body["people"])}
+
     device_id = body.get("device_id")
     if not device_id:
         return {"status": "error", "detail": "missing device_id"}

@@ -54,11 +54,27 @@ sync_device() {
   local user
   local source_dir
   local remote_dir
+  local -a rsync_args
 
   host="$(device_host "$device")"
   user="$(device_user "$device")"
   source_dir="${SCRIPT_DIR}/${device}/"
   remote_dir="/home/${user}/Desktop/${device}"
+  rsync_args=(
+    -avz
+    --delete
+    --exclude "__pycache__/"
+  )
+
+  case "$device" in
+    lamp)
+      # Preserve Pi-local taught poses / recordings when syncing code.
+      rsync_args+=(
+        --exclude "poses.json"
+        --exclude "motions.json"
+      )
+      ;;
+  esac
 
   if [[ ! -d "$source_dir" ]]; then
     echo "Missing local device folder: $source_dir" >&2
@@ -67,7 +83,7 @@ sync_device() {
 
   echo "Syncing ${device} -> ${user}@${host}:${remote_dir}"
   ssh "${SSH_OPTS[@]}" "${user}@${host}" "mkdir -p '${remote_dir}'"
-  rsync -avz --delete -e "ssh ${SSH_OPTS[*]}" "${source_dir}" "${user}@${host}:${remote_dir}/"
+  rsync "${rsync_args[@]}" -e "ssh ${SSH_OPTS[*]}" "${source_dir}" "${user}@${host}:${remote_dir}/"
 }
 
 if [[ $# -eq 0 ]]; then

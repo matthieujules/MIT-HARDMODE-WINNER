@@ -43,12 +43,14 @@ SAMPLE_RATE = 16000          # Hz
 CHANNELS = 1                 # mono
 DTYPE = "int16"
 CHUNK_SAMPLES = 512          # 32 ms at 16 kHz -- Silero VAD native frame size
-SILENCE_DURATION_MS = 300    # ms of silence to mark end of speech
+SILENCE_DURATION_MS = 700    # ms of silence to mark end of speech
 SPEECH_PAD_MS = 150          # ms of padding kept before/after speech
 MIN_SPEECH_DURATION_S = 0.5  # ignore very short noises
+MAX_UTTERANCE_S = 30
 
 EMERGENCY_STOP_PATTERN = re.compile(
-    r"\b(stop|halt|freeze|wait|no\s*no\s*no)\b", re.IGNORECASE
+    r"\b(stop stop|stop all|emergency stop|freeze all|no\s+no\s+no)\b",
+    re.IGNORECASE,
 )
 
 # How many chunks equal the silence / pad durations
@@ -327,6 +329,27 @@ def run_voice_capture(backend: str, cp_url: str):
                         logger.debug("Speech started (prob=%.2f)", speech_prob)
                 else:
                     speech_buffer.append(chunk)
+                    current_duration = len(speech_buffer) * CHUNK_SAMPLES / SAMPLE_RATE
+                    if current_duration >= MAX_UTTERANCE_S:
+                        logger.info(
+                            "Max utterance duration reached (%.1fs), force-shipping",
+                            current_duration,
+                        )
+                        is_speaking = False
+                        silence_counter = 0
+
+                        pcm = np.concatenate(speech_buffer)
+                        wav_bytes = pcm_to_wav_bytes(pcm)
+                        speech_buffer = []
+                        pre_buffer.clear()
+
+                        threading.Thread(
+                            target=_transcribe_and_post,
+                            args=(transcribe, wav_bytes, cp_url),
+                            daemon=True,
+                        ).start()
+                        continue
+
                     if speech_prob < 0.5:
                         silence_counter += 1
                     else:

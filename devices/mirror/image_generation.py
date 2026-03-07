@@ -31,11 +31,13 @@ class MirrorImageGenerator:
         self.display_size = display_size
         self.client = self._build_image_client()
         self.image_model = os.getenv("MIRROR_IMAGE_MODEL", "gpt-image-1")
+        self.image_quality = os.getenv("MIRROR_IMAGE_QUALITY", "medium")
 
     def generate(self, plan: DisplayPlan, frame: CapturedFrame) -> GenerationResult:
         generated = None
+        api_error = None
         if self.client is not None:
-            generated = self._try_generate_with_api(plan, frame)
+            generated, api_error = self._try_generate_with_api(plan, frame)
 
         if generated is None:
             image = self._render_local(plan, frame)
@@ -54,6 +56,7 @@ class MirrorImageGenerator:
                 "display_mode": plan.display_mode,
                 "icon_name": plan.icon_name,
             },
+            api_error=api_error,
         )
 
     def _build_image_client(self) -> OpenAI | None:
@@ -67,22 +70,33 @@ class MirrorImageGenerator:
             kwargs["base_url"] = base_url
         return OpenAI(**kwargs)
 
-    def _try_generate_with_api(self, plan: DisplayPlan, frame: CapturedFrame) -> Image.Image | None:
+    def _try_generate_with_api(self, plan: DisplayPlan, frame: CapturedFrame) -> tuple[Image.Image | None, str | None]:
+        edit_allowed = plan.wants_camera_context and frame.source == "camera"
+        if edit_allowed:
+            try:
+                return self._edit_from_camera_frame(plan, frame), None
+            except Exception as exc:
+                edit_error = f"{type(exc).__name__}: {exc}"
+                try:
+                    return self._generate_from_prompt(plan), f"image edit failed, prompt generation succeeded: {edit_error}"
+                except Exception as prompt_exc:
+                    prompt_error = f"{type(prompt_exc).__name__}: {prompt_exc}"
+                    return None, f"image edit failed: {edit_error}; prompt generation failed: {prompt_error}"
+
         try:
-            if plan.wants_camera_context:
-                return self._edit_from_camera_frame(plan, frame)
-            return self._generate_from_prompt(plan)
-        except Exception:
-            return None
+            return self._generate_from_prompt(plan), None
+        except Exception as exc:
+            return None, f"{type(exc).__name__}: {exc}"
 
     def _edit_from_camera_frame(self, plan: DisplayPlan, frame: CapturedFrame) -> Image.Image:
         buffer = io.BytesIO()
         frame.image.convert("RGBA").save(buffer, format="PNG")
-        buffer.seek(0)
         response = self.client.images.edit(
             model=self.image_model,
-            image=buffer,
+            image=("mirror-frame.png", buffer.getvalue(), "image/png"),
             prompt=plan.prompt,
+            quality=self.image_quality,
+            output_format="png",
             size=self._api_size(),
         )
         return self._decode_response_image(response).resize(self.display_size, Image.Resampling.LANCZOS)
@@ -91,6 +105,8 @@ class MirrorImageGenerator:
         response = self.client.images.generate(
             model=self.image_model,
             prompt=plan.prompt,
+            quality=self.image_quality,
+            output_format="png",
             size=self._api_size(),
         )
         return self._decode_response_image(response).resize(self.display_size, Image.Resampling.LANCZOS)

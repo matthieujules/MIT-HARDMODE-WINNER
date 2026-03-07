@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .schemas import DeviceEvent, DeviceInfo, DeviceRegistration
-from .spatial import deep_merge, init_spatial_state, load_room_config
+from .spatial import deep_merge, init_spatial_state, load_room_config, normalize_spatial_state, primary_user_from_people
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +38,15 @@ class StateManager:
         if not self._event_log_path.exists():
             self._event_log_path.touch()
 
-        # Initialize spatial state from room config if not present
+        # Initialize / migrate spatial state from room config
         state = json.loads(self._state_path.read_text())
-        if "spatial" not in state:
-            room_config = load_room_config(str(self._data_dir / "room.json"))
-            if room_config:
-                state["spatial"] = init_spatial_state(room_config)
+        room_config = load_room_config(str(self._data_dir / "room.json"))
+        if room_config:
+            original_spatial = state.get("spatial")
+            state["spatial"] = normalize_spatial_state(original_spatial, room_config)
+            if original_spatial != state["spatial"]:
                 self._state_path.write_text(json.dumps(state, default=str))
-                logger.info("Initialized spatial state from room config")
+                logger.info("Initialized/migrated spatial state from room config")
 
     # ── State (state.json) ─────────────────────────────────────────
 
@@ -71,6 +72,13 @@ class StateManager:
                 user = spatial.get("user", {})
                 user.update(patch)
                 spatial["user"] = user
+                people = spatial.get("people", [])
+                if people:
+                    people[0].update({
+                        key: value for key, value in patch.items()
+                        if key in {"x_cm", "y_cm", "label", "source"}
+                    })
+                    spatial["people"] = people
             else:
                 devices = spatial.get("devices", {})
                 if device_id in devices:
@@ -81,6 +89,18 @@ class StateManager:
             state["spatial"] = spatial
             self._state_path.write_text(json.dumps(state, default=str))
         logger.info("Spatial device updated: %s <- %s", device_id, list(patch.keys()))
+
+    def update_spatial_people(self, people: list[dict]) -> None:
+        """Replace tracked people positions and keep legacy user alias in sync."""
+        with self._lock:
+            state = json.loads(self._state_path.read_text())
+            spatial = state.get("spatial", {})
+            spatial["people"] = people
+            spatial["user"] = primary_user_from_people(people)
+            state["spatial"] = spatial
+            state["people_count"] = len(people)
+            self._state_path.write_text(json.dumps(state, default=str))
+        logger.info("Spatial people updated: %d tracked", len(people))
 
     # ── Devices (devices.json) ─────────────────────────────────────
 

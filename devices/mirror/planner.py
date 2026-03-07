@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 
@@ -17,7 +18,7 @@ except ImportError:
 class MirrorInstructionPlanner:
     def __init__(self) -> None:
         self.cerebras_client = self._build_cerebras_client()
-        self.cerebras_model = os.getenv("MIRROR_CEREBRAS_MODEL", "qwen-3-32b")
+        self.cerebras_model = os.getenv("MIRROR_CEREBRAS_MODEL", "gpt-oss-120b")
 
     def plan(self, instruction: str) -> DisplayPlan:
         instruction = instruction.strip()
@@ -57,11 +58,13 @@ class MirrorInstructionPlanner:
                     {"role": "user", "content": instruction},
                 ],
             )
-            _ = response.output_text
+            text = (response.output_text or "").strip()
+            if not text:
+                return None
+            payload = json.loads(text)
+            return self._plan_from_payload(instruction, payload)
         except Exception:
             return None
-
-        return None
 
     def _plan_locally(self, instruction: str) -> DisplayPlan:
         lowered = instruction.lower()
@@ -102,9 +105,23 @@ class MirrorInstructionPlanner:
             display_mode="symbol",
             icon_name=icon_name,
             caption=caption,
+            wants_camera_context=False,
             accent_color=accent_color,
             background_color=background_color,
             metadata={"planner": "local"},
+        )
+
+    def _plan_from_payload(self, instruction: str, payload: dict) -> DisplayPlan:
+        return DisplayPlan(
+            raw_instruction=instruction,
+            prompt=str(payload.get("prompt") or self._default_prompt(instruction, payload.get("icon_name", "sparkle"))),
+            display_mode=str(payload.get("display_mode") or "scene"),
+            icon_name=str(payload.get("icon_name") or "sparkle"),
+            caption=str(payload.get("caption") or self._caption(instruction)),
+            wants_camera_context=bool(payload.get("wants_camera_context", True)),
+            accent_color=self._parse_color(payload.get("accent_color"), (94, 234, 212)),
+            background_color=self._parse_color(payload.get("background_color"), (11, 18, 32)),
+            metadata={"planner": "cerebras"},
         )
 
     def _default_prompt(self, instruction: str, icon_name: str) -> str:
@@ -125,3 +142,22 @@ class MirrorInstructionPlanner:
 
     def _matches(self, text: str, pattern: str) -> bool:
         return re.search(pattern, text) is not None
+
+    def _parse_color(
+        self,
+        raw: object,
+        default: tuple[int, int, int],
+    ) -> tuple[int, int, int]:
+        if isinstance(raw, str):
+            value = raw.strip().lstrip("#")
+            if len(value) == 6:
+                try:
+                    return tuple(int(value[idx:idx + 2], 16) for idx in (0, 2, 4))
+                except ValueError:
+                    return default
+        if isinstance(raw, (list, tuple)) and len(raw) == 3:
+            try:
+                return tuple(max(0, min(255, int(component))) for component in raw)
+            except (TypeError, ValueError):
+                return default
+        return default
