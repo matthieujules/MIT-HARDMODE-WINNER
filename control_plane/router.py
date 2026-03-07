@@ -1,4 +1,4 @@
-"""Deterministic command router with emergency stop and voice lock."""
+"""Transcript safety and voice lock helpers."""
 
 import logging
 import re
@@ -9,71 +9,14 @@ logger = logging.getLogger(__name__)
 # ── Emergency stop ────────────────────────────────────────────────
 
 EMERGENCY_STOP_PATTERN = re.compile(
-    r"\b(stop|halt|freeze|wait|no\s*no\s*no)\b", re.IGNORECASE
+    r"\b(stop stop|stop all|emergency stop|freeze all|no\s+no\s+no)\b",
+    re.IGNORECASE,
 )
 
 
 def is_emergency_stop(text: str) -> bool:
     """Return True if transcript matches an emergency stop pattern."""
     return bool(EMERGENCY_STOP_PATTERN.search(text))
-
-
-# ── Deterministic patterns ────────────────────────────────────────
-# Each entry: (compiled_regex, device_id, action, param_extractor)
-# param_extractor is a callable(match) -> dict
-
-DETERMINISTIC_PATTERNS: list[tuple[re.Pattern, str, str, callable]] = [
-    # Lamp color commands
-    (
-        re.compile(r"\blamp\s+(red|green|blue|white|yellow|orange|purple|pink|cyan|warm|cool)\b", re.IGNORECASE),
-        "lamp",
-        "set_color",
-        lambda m: {"color": m.group(1).lower()},
-    ),
-    # Lamp brightness
-    (
-        re.compile(r"\blamp\s+brightness\s+(\d+)\b", re.IGNORECASE),
-        "lamp",
-        "set_brightness",
-        lambda m: {"brightness": int(m.group(1))},
-    ),
-    # Lights off
-    (
-        re.compile(r"\b(?:lights?\s+off|turn\s+off\s+(?:the\s+)?lights?)\b", re.IGNORECASE),
-        "lamp",
-        "set_brightness",
-        lambda _: {"brightness": 0},
-    ),
-    # Mirror tilt
-    (
-        re.compile(r"\bmirror\s+tilt\s+(up|down)\b", re.IGNORECASE),
-        "mirror",
-        "tilt",
-        lambda m: {"direction": m.group(1).lower()},
-    ),
-    # Rover stop (also caught by emergency stop, but explicit here)
-    (
-        re.compile(r"\brover\s+stop\b", re.IGNORECASE),
-        "rover",
-        "stop",
-        lambda _: {},
-    ),
-    # Rover drive commands
-    (
-        re.compile(r"\brover\s+(?:go|drive|move)\s+(forward|backward|left|right|home)\b", re.IGNORECASE),
-        "rover",
-        "drive_to",
-        lambda m: {"direction": m.group(1).lower()},
-    ),
-    # Radio volume
-    (
-        re.compile(r"\b(?:radio\s+)?volume\s+(up|down|\d+)\b", re.IGNORECASE),
-        "radio",
-        "set_volume",
-        lambda m: {"level": m.group(1).lower()},
-    ),
-]
-
 
 # ── Voice lock ────────────────────────────────────────────────────
 
@@ -113,46 +56,3 @@ def clear_voice_lock(device_id: str, state_manager) -> None:
         del voice_lock[device_id]
         state_manager.write_state({"voice_lock": voice_lock})
         logger.info("Voice lock cleared for %s", device_id)
-
-
-# ── Main router ───────────────────────────────────────────────────
-
-
-def route_transcript(text: str, state_manager) -> tuple:
-    """Route a transcript through the deterministic pipeline.
-
-    Processing order (per spec §8):
-      1. Emergency stop check
-      2. Voice lock filter
-      3. Deterministic regex match
-      4. Fallback to master reasoning
-
-    Returns one of:
-      ("emergency_stop",)
-      ("dropped",)
-      ("deterministic", device_id, action, params_dict)
-      ("master",)
-    """
-    # 1. Emergency stop — bypasses voice lock
-    if is_emergency_stop(text):
-        logger.info("Emergency stop triggered: %r", text)
-        return ("emergency_stop",)
-
-    # 2. Voice lock — drop non-emergency transcripts while speaking
-    if check_voice_lock(state_manager):
-        logger.info("Transcript dropped (voice lock active): %r", text)
-        return ("dropped",)
-
-    # 3. Deterministic regex matching
-    for pattern, device_id, action, param_extractor in DETERMINISTIC_PATTERNS:
-        match = pattern.search(text)
-        if match:
-            params = param_extractor(match)
-            logger.info(
-                "Deterministic match: %r -> %s.%s(%s)", text, device_id, action, params
-            )
-            return ("deterministic", device_id, action, params)
-
-    # 4. Fallback to master reasoning
-    logger.info("No deterministic match, routing to master: %r", text)
-    return ("master",)

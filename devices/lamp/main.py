@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import logging
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env BEFORE any imports that read env vars at module level (agent.py reads CEREBRAS_API_KEY)
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 import yaml
 
@@ -37,6 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--live-serial",
         action="store_true",
         help="Send the resulting payload to the configured serial port instead of simulating.",
+    )
+    parser.add_argument(
+        "--connect",
+        action="store_true",
+        help="Run the full WebSocket runtime (register + connect to control plane).",
     )
     return parser
 
@@ -90,6 +102,22 @@ def main() -> int:
     config = load_config(args.config.resolve())
     simulate = not args.live_serial
 
+    # ── WebSocket runtime mode ────────────────────────────────────
+    if args.connect:
+        from ws_client import run_ws_client
+
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        )
+        print(f"Lamp runtime: connecting to control plane (simulate={simulate})")
+        try:
+            asyncio.run(run_ws_client(config, simulate=simulate))
+        except KeyboardInterrupt:
+            print("\nLamp runtime stopped.")
+        return 0
+
+    # ── CLI simulator mode (original) ─────────────────────────────
     planner = InstructionPlanner(config)
     controller = LEMHardwareController(config, simulate=simulate)
 

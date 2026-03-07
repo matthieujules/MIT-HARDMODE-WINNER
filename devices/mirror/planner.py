@@ -17,7 +17,7 @@ except ImportError:
 class MirrorInstructionPlanner:
     def __init__(self) -> None:
         self.cerebras_client = self._build_cerebras_client()
-        self.cerebras_model = os.getenv("MIRROR_CEREBRAS_MODEL", "qwen-3-32b")
+        self.cerebras_model = os.getenv("MIRROR_CEREBRAS_MODEL", "gpt-oss-120b")
 
     def plan(self, instruction: str) -> DisplayPlan:
         instruction = instruction.strip()

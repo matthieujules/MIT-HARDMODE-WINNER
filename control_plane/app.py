@@ -25,7 +25,6 @@ from .router import (
     check_voice_lock,
     clear_voice_lock,
     is_emergency_stop,
-    route_transcript,
     set_voice_lock,
 )
 from .schemas import (
@@ -48,6 +47,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 state_manager = StateManager()
+
+
+class TranscriptDebouncer:
+    def __init__(self, flush_delay_s=1.5):
+        self.flush_delay_s = flush_delay_s
+        self.buffer = []
+        self.pending_handle = None
+
+    def add(self, text: str):
+        self.buffer.append(text)
+        if self.pending_handle is not None:
+            self.pending_handle.cancel()
+        self.pending_handle = asyncio.get_event_loop().call_later(
+            self.flush_delay_s, self._flush
+        )
+
+    def _flush(self):
+        self.pending_handle = None
+        if not self.buffer:
+            return
+        text = " ".join(self.buffer)
+        self.buffer = []
+        if check_voice_lock(state_manager):
+            logger.info("Buffered transcript dropped (voice lock active): %r", text)
+            return
+        event = DeviceEvent(
+            device_id="global_mic",
+            kind="transcript",
+            payload={"text": text},
+        )
+        global _active_master_task
+        state_manager.append_event(event)
+        _active_master_task = asyncio.create_task(_run_master_reasoning(event))
+
+    def cancel(self):
+        if self.pending_handle is not None:
+            self.pending_handle.cancel()
+            self.pending_handle = None
+        self.buffer = []
+
+
+_transcript_debouncer = TranscriptDebouncer()
 
 
 # ── ConnectionManager ──────────────────────────────────────────────
@@ -131,9 +172,12 @@ async def dispatch_spawn(device_id: str, instruction: str) -> dict:
 
 async def process_event(event: DeviceEvent) -> dict:
     """Route a DeviceEvent per the spec section 8 Event Routing Table."""
-    state_manager.append_event(event)
-
     kind = event.kind
+
+    # Don't log transcript fragments to event_log — the debouncer will log
+    # the joined transcript when it flushes, avoiding duplicates in master prompt.
+    if kind != "transcript":
+        state_manager.append_event(event)
 
     if kind == "transcript":
         return await _handle_transcript(event)
@@ -156,26 +200,24 @@ async def process_event(event: DeviceEvent) -> dict:
 
 async def _handle_transcript(event: DeviceEvent) -> dict:
     text = event.payload.get("text", "")
-    result = route_transcript(text, state_manager)
-    route_type = result[0]
+    if is_emergency_stop(text):
+        logger.info("Emergency stop triggered: %r", text)
+        _transcript_debouncer.cancel()
+        # Cancel any in-progress master reasoning task
+        if _active_master_task is not None and not _active_master_task.done():
+            _active_master_task.cancel()
+            logger.info("Cancelled in-progress master turn for emergency stop")
+        devices = state_manager.read_devices()
+        for device in devices:
+            await dispatch_command(device.device_id, "stop", {})
+        return {"status": "ok", "detail": "emergency stop broadcast to all devices"}
 
-    if route_type == "emergency_stop":
-        # Broadcast stop command to rover (the only mobile device)
-        await dispatch_command("rover", "stop", {})
-        return {"status": "ok", "detail": "emergency stop broadcast"}
-
-    elif route_type == "dropped":
+    if check_voice_lock(state_manager):
+        logger.info("Transcript dropped (voice lock active): %r", text)
         return {"status": "ok", "detail": "transcript dropped (voice lock active)"}
 
-    elif route_type == "deterministic":
-        _, device_id, action, params = result
-        send_result = await dispatch_command(device_id, action, params)
-        return {"status": "ok", "detail": f"deterministic: {device_id}.{action}", "dispatch": send_result}
-
-    elif route_type == "master":
-        return await _run_master_reasoning(event)
-
-    return {"status": "error", "detail": f"unexpected route type: {route_type}"}
+    _transcript_debouncer.add(text)
+    return {"status": "ok", "detail": "transcript buffered"}
 
 
 def _handle_action_result(event: DeviceEvent) -> dict:
@@ -303,6 +345,9 @@ _master_lock = asyncio.Lock()
 
 # Track active vision background task so voice events can preempt it
 _active_vision_task: asyncio.Task | None = None
+
+# Track active master reasoning task so e-stop can cancel it
+_active_master_task: asyncio.Task | None = None
 
 # Devices that trigger voice lock when receiving spawn instructions
 _SPEAKING_DEVICES = {"mirror", "radio"}

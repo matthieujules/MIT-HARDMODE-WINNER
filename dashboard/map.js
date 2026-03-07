@@ -5,6 +5,7 @@
 
 // ── Module state ────────────────────────────────────────────────────
 let _container = null;
+let _mapStage = null;
 let _svg = null;
 let _initialized = false;
 
@@ -17,6 +18,7 @@ let _roomHeight = 400;
 let _gGrid = null;
 let _gFurniture = null;
 let _gWaypoints = null;
+let _gBrain = null;
 let _gPaths = null;
 let _gTrail = null;
 let _gDevices = null;
@@ -24,8 +26,34 @@ let _gPulses = null;
 let _gUser = null;
 let _gTooltip = null;
 
+// HTML overlay layers
+let _overlayRoot = null;
+let _brainHud = null;
+let _brainSummary = null;
+let _brainHudMeta = null;
+let _brainTerminalViewport = null;
+let _brainTerminalLines = null;
+let _devicePanelsLayer = null;
+let _brainVisibleLineIds = [];
+let _brainTerminalHistory = [];
+let _brainScrollFrame = null;
+
 // Device elements keyed by device_id
 const _deviceGroups = {};
+const _devicePanels = {};
+
+const DEVICE_PANEL_WIDTH = 220;
+const DEVICE_PANEL_HEIGHT = 112;
+const ACTIVE_WINDOW_MS = 7000;
+const KNOWN_DEVICE_IDS = ['lamp', 'mirror', 'radio', 'rover'];
+const MAP_TOP_GUTTER_PX = 150;
+
+const DEVICE_PANEL_SLOTS = {
+  lamp:   { left: 94,  bottom: 118 },
+  rover:  { left: 36,  top: 178 },
+  mirror: { right: 192, top: 178 },
+  radio:  { right: 30, top: 282 },
+};
 
 // Pulse dedup
 const _pulsedIds = new Set();
@@ -63,6 +91,8 @@ const DEVICE_COLORS = {
 // Device status from last update
 let _lastSpatial = null;
 let _lastDevicesData = null;
+let _lastOverlayData = null;
+let _lastDeviceStatuses = {};
 
 // ── SVG namespace ───────────────────────────────────────────────────
 const NS = 'http://www.w3.org/2000/svg';
@@ -110,6 +140,7 @@ export async function initMap(containerElement) {
   _gGrid = svgEl('g', { class: 'layer-grid' });
   _gFurniture = svgEl('g', { class: 'layer-furniture' });
   _gWaypoints = svgEl('g', { class: 'layer-waypoints' });
+  _gBrain = svgEl('g', { class: 'layer-brain' });
   _gPaths = svgEl('g', { class: 'layer-paths' });
   _gTrail = svgEl('g', { class: 'layer-trail' });
   _gUser = svgEl('g', { class: 'layer-user' });
@@ -120,6 +151,7 @@ export async function initMap(containerElement) {
   _svg.appendChild(_gGrid);
   _svg.appendChild(_gFurniture);
   _svg.appendChild(_gWaypoints);
+  _svg.appendChild(_gBrain);
   _svg.appendChild(_gPaths);
   _svg.appendChild(_gTrail);
   _svg.appendChild(_gUser);
@@ -127,7 +159,16 @@ export async function initMap(containerElement) {
   _svg.appendChild(_gPulses);
   _svg.appendChild(_gTooltip);
 
-  _container.appendChild(_svg);
+  _mapStage = document.createElement('div');
+  _mapStage.className = 'room-map-stage';
+  _mapStage.style.position = 'absolute';
+  _mapStage.style.left = '0';
+  _mapStage.style.right = '0';
+  _mapStage.style.bottom = '0';
+  _mapStage.style.top = `${MAP_TOP_GUTTER_PX}px`;
+  _mapStage.appendChild(_svg);
+  _container.appendChild(_mapStage);
+  _createOverlayUI();
 
   // Draw static elements
   _drawGrid();
@@ -254,6 +295,323 @@ function _drawRoomBoundary() {
   });
   label.textContent = `${_roomWidth}x${_roomHeight}cm`;
   _gGrid.appendChild(label);
+}
+
+function _brainOrigin() {
+  return {
+    x: _roomWidth / 2,
+    y: 12,
+  };
+}
+
+function _drawBrainNode() {
+  const { x, y } = _brainOrigin();
+  const group = svgEl('g', {
+    class: 'brain-node',
+    transform: `translate(${x}, ${y})`,
+  });
+
+  const halo = svgEl('circle', {
+    cx: 0,
+    cy: 0,
+    r: 20,
+    class: 'brain-node__halo',
+  });
+  group.appendChild(halo);
+
+  const ring = svgEl('circle', {
+    cx: 0,
+    cy: 0,
+    r: 13,
+    class: 'brain-node__ring',
+  });
+  group.appendChild(ring);
+
+  const points = [];
+  for (let i = 0; i < 6; i += 1) {
+    const angle = (-90 + i * 60) * Math.PI / 180;
+    points.push(`${Math.cos(angle) * 9},${Math.sin(angle) * 9}`);
+  }
+
+  const shell = svgEl('polygon', {
+    points: points.join(' '),
+    class: 'brain-node__shell',
+  });
+  group.appendChild(shell);
+
+  const core = svgEl('circle', {
+    cx: 0,
+    cy: 0,
+    r: 4.5,
+    class: 'brain-node__core',
+  });
+  group.appendChild(core);
+
+  const label = svgEl('text', {
+    x: 0,
+    y: 28,
+    class: 'brain-node__label',
+    'text-anchor': 'middle',
+  });
+  label.textContent = 'CENTRAL MODEL';
+  group.appendChild(label);
+
+  _gBrain.appendChild(group);
+}
+
+function _createOverlayUI() {
+  _overlayRoot = document.createElement('div');
+  _overlayRoot.className = 'map-overlay-root';
+  _overlayRoot.style.position = 'absolute';
+  _overlayRoot.style.inset = '0';
+  _overlayRoot.style.zIndex = '12';
+  _overlayRoot.style.pointerEvents = 'none';
+
+  _brainHud = document.createElement('div');
+  _brainHud.className = 'brain-hud';
+  _brainHud.innerHTML = [
+    '<div class="brain-hud__eyebrow">CONTROL PLANE</div>',
+    '<div class="brain-hud__window">',
+      '<div class="brain-hud__chrome">',
+        '<span class="brain-hud__dots" aria-hidden="true">',
+          '<span class="brain-hud__dot brain-hud__dot--red"></span>',
+          '<span class="brain-hud__dot brain-hud__dot--amber"></span>',
+          '<span class="brain-hud__dot brain-hud__dot--green"></span>',
+        '</span>',
+        '<span class="brain-hud__title">brain-shell</span>',
+        '<span class="brain-hud__meta">LIVE</span>',
+      '</div>',
+      '<div class="brain-hud__terminal">',
+        '<div class="brain-hud__lines">',
+          '<div class="brain-hud__line brain-hud__line--placeholder">$ waiting for live logs…</div>',
+        '</div>',
+      '</div>',
+    '</div>',
+    '<div class="brain-hud__summary">MASTER · awaiting reasoning</div>',
+  ].join('');
+
+  _brainSummary = _brainHud.querySelector('.brain-hud__summary');
+  _brainHudMeta = _brainHud.querySelector('.brain-hud__meta');
+  _brainTerminalViewport = _brainHud.querySelector('.brain-hud__terminal');
+  _brainTerminalLines = _brainHud.querySelector('.brain-hud__lines');
+
+  _devicePanelsLayer = document.createElement('div');
+  _devicePanelsLayer.className = 'device-panels-layer';
+
+  _overlayRoot.appendChild(_brainHud);
+  _overlayRoot.appendChild(_devicePanelsLayer);
+  _container.appendChild(_overlayRoot);
+
+  _positionBrainHud();
+}
+
+function _positionBrainHud() {
+  if (!_brainHud) return;
+
+  const rect = _container.getBoundingClientRect();
+  _brainHud.style.left = `${Math.round(rect.width / 2)}px`;
+  _brainHud.style.top = '72px';
+}
+
+function _updateBrainOverlay(overlayData = {}) {
+  if (!_brainHud) return;
+
+  _positionBrainHud();
+
+  const feedItems = Array.isArray(overlayData.feedItems) ? overlayData.feedItems : [];
+  const knownIds = new Set(_brainVisibleLineIds);
+  const incomingItems = feedItems.filter((line) => !knownIds.has(line.id));
+
+  if (incomingItems.length > 0) {
+    _brainTerminalHistory.push(...incomingItems);
+    _brainVisibleLineIds = [..._brainVisibleLineIds, ...incomingItems.map((line) => line.id)];
+  }
+
+  if (_brainTerminalHistory.length > 40) {
+    const overflow = _brainTerminalHistory.length - 40;
+    _brainTerminalHistory.splice(0, overflow);
+    _brainVisibleLineIds = _brainTerminalHistory.map((line) => line.id);
+  }
+
+  if (_brainTerminalHistory.length > 0) {
+    const freshIds = new Set(incomingItems.map((line) => line.id));
+    _brainTerminalLines.innerHTML = _brainTerminalHistory
+      .map((line) => {
+        const freshClass = freshIds.has(line.id) ? ' brain-hud__line--fresh' : '';
+        return `<div class="brain-hud__line${freshClass}"><span class="brain-hud__prompt">&gt;</span>${_escapeHTML(line.text)}</div>`;
+      })
+      .join('');
+
+    if (incomingItems.length > 0) {
+      _animateBrainTerminalScroll(incomingItems);
+    } else if (_brainTerminalViewport.scrollTop === 0) {
+      _brainTerminalViewport.scrollTop = Math.max(
+        0,
+        _brainTerminalViewport.scrollHeight - _brainTerminalViewport.clientHeight,
+      );
+    }
+  } else {
+    _brainTerminalLines.innerHTML = '<div class="brain-hud__line brain-hud__line--placeholder">$ waiting for live logs…</div>';
+  }
+
+  if (overlayData.brain && overlayData.brain.summary) {
+    const model = (overlayData.brain.model || 'master').toUpperCase();
+    _brainSummary.textContent = `${model} · ${overlayData.brain.summary}`;
+    _brainHudMeta.textContent = `${overlayData.brain.latency || '?'}ms`;
+  } else {
+    _brainSummary.textContent = 'MASTER · awaiting reasoning';
+    _brainHudMeta.textContent = 'LIVE';
+  }
+}
+
+function _animateBrainTerminalScroll(newItems) {
+  if (!_brainTerminalViewport || !Array.isArray(newItems) || newItems.length === 0) return;
+
+  const viewport = _brainTerminalViewport;
+  const target = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+  const start = viewport.scrollTop;
+  const distance = target - start;
+
+  if (distance <= 1) {
+    viewport.scrollTop = target;
+    return;
+  }
+
+  const charCount = newItems.reduce((total, item) => total + (item.text || '').length, 0);
+  const speed = 120 + (newItems.length * 90) + (charCount * 0.35);
+  const duration = Math.max(180, Math.min(900, (distance / Math.max(speed, 1)) * 1000));
+  const startTime = performance.now();
+
+  if (_brainScrollFrame) {
+    cancelAnimationFrame(_brainScrollFrame);
+  }
+
+  const tick = (now) => {
+    const progress = Math.min(1, (now - startTime) / duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    viewport.scrollTop = start + (distance * eased);
+
+    if (progress < 1) {
+      _brainScrollFrame = requestAnimationFrame(tick);
+    } else {
+      _brainScrollFrame = null;
+      viewport.scrollTop = target;
+    }
+  };
+
+  _brainScrollFrame = requestAnimationFrame(tick);
+}
+
+function _getOrCreateDevicePanel(deviceId) {
+  if (_devicePanels[deviceId]) return _devicePanels[deviceId];
+
+  const root = document.createElement('div');
+  root.className = 'device-panel';
+  root.setAttribute('data-device-id', deviceId);
+  root.style.setProperty('--device-accent', DEVICE_COLORS[deviceId] || '#e2e8f0');
+  root.innerHTML = [
+    '<div class="device-panel__header">',
+      `<span class="device-panel__name">${_escapeHTML(deviceId.toUpperCase())}</span>`,
+      '<span class="device-panel__status">IDLE</span>',
+    '</div>',
+    '<div class="device-panel__row">',
+      '<span class="device-panel__label">IN</span>',
+      '<span class="device-panel__value device-panel__value--instruction">Awaiting instruction</span>',
+    '</div>',
+    '<div class="device-panel__row">',
+      '<span class="device-panel__label">OUT</span>',
+      '<span class="device-panel__value device-panel__value--output">No output yet</span>',
+    '</div>',
+  ].join('');
+
+  _devicePanelsLayer.appendChild(root);
+
+  _devicePanels[deviceId] = {
+    root,
+    status: root.querySelector('.device-panel__status'),
+    instruction: root.querySelector('.device-panel__value--instruction'),
+    output: root.querySelector('.device-panel__value--output'),
+  };
+
+  return _devicePanels[deviceId];
+}
+
+function _updateDevicePanel(deviceId, x, y, status, activity = {}) {
+  const panel = _getOrCreateDevicePanel(deviceId);
+  const rect = _container.getBoundingClientRect();
+  const panelWidth = panel.root.offsetWidth || DEVICE_PANEL_WIDTH;
+  const panelHeight = panel.root.offsetHeight || DEVICE_PANEL_HEIGHT;
+  const slot = DEVICE_PANEL_SLOTS[deviceId];
+  let left = 0;
+  let top = 0;
+
+  if (slot) {
+    left = typeof slot.left === 'number' ? slot.left : (rect.width - panelWidth - (slot.right || 0));
+    top = typeof slot.top === 'number' ? slot.top : (rect.height - panelHeight - (slot.bottom || 0));
+  } else {
+    const point = _projectSvgPoint(x, y);
+    const preferLeft = x > _roomWidth * 0.56;
+    const preferAbove = y > _roomHeight * 0.55;
+
+    left = point.x + (preferLeft ? -(panelWidth + 28) : 26);
+    top = point.y + (preferAbove ? -(panelHeight + 20) : 18);
+  }
+
+  left = Math.max(12, Math.min(rect.width - panelWidth - 12, left));
+  top = Math.max(86, Math.min(rect.height - panelHeight - 104, top));
+
+  panel.root.style.left = `${Math.round(left)}px`;
+  panel.root.style.top = `${Math.round(top)}px`;
+  panel.status.textContent = String(status || 'idle').toUpperCase();
+  panel.instruction.textContent = _truncateText(activity.instruction || 'Awaiting instruction', 92);
+  panel.output.textContent = _truncateText(activity.output || activity.dispatch || 'No output yet', 92);
+
+  panel.root.classList.toggle('device-panel--active', _isRecentlyActive(status, activity));
+  panel.root.classList.toggle('device-panel--offline', status === 'offline');
+}
+
+function _isRecentlyActive(status, activity) {
+  if (status === 'executing' || status === 'speaking') return true;
+
+  const latestTimestamp = Math.max(
+    _timestampMs(activity && activity.instructionAt),
+    _timestampMs(activity && activity.outputAt),
+  );
+  return latestTimestamp > 0 && (Date.now() - latestTimestamp) < ACTIVE_WINDOW_MS;
+}
+
+function _setDevicePanelBurst(deviceId) {
+  const panel = _devicePanels[deviceId];
+  if (!panel) return;
+
+  panel.root.classList.remove('device-panel--burst');
+  clearTimeout(panel.burstTimer);
+  void panel.root.offsetWidth;
+  panel.root.classList.add('device-panel--burst');
+  panel.burstTimer = setTimeout(() => {
+    panel.root.classList.remove('device-panel--burst');
+  }, 900);
+}
+
+function _projectSvgPoint(x, y) {
+  const rect = _container.getBoundingClientRect();
+  const ctm = _svg && _svg.getScreenCTM ? _svg.getScreenCTM() : null;
+
+  if (!ctm || !_svg || !_svg.createSVGPoint) {
+    return {
+      x: rect.width * (x / _roomWidth),
+      y: rect.height * (y / _roomHeight),
+    };
+  }
+
+  const pt = _svg.createSVGPoint();
+  pt.x = x;
+  pt.y = y;
+  const projected = pt.matrixTransform(ctm);
+  return {
+    x: projected.x - rect.left,
+    y: projected.y - rect.top,
+  };
 }
 
 function _drawFurniture(furniture) {
@@ -579,25 +937,123 @@ function _createDeviceIcon(deviceId, color) {
   return g;
 }
 
+function _fallbackSpatialForDevice(deviceId) {
+  if (_roomConfig && _roomConfig.anchors && _roomConfig.anchors[deviceId]) {
+    const anchor = _roomConfig.anchors[deviceId];
+    return {
+      x_cm: anchor.x_cm,
+      y_cm: anchor.y_cm,
+      theta_deg: anchor.theta_deg || 0,
+      fixed: true,
+      source: 'room_config',
+      status: 'idle',
+      motion: null,
+    };
+  }
+
+  if (deviceId === 'rover' && _roomConfig) {
+    const mainDesk = Array.isArray(_roomConfig.furniture)
+      ? _roomConfig.furniture.find((item) => item.id === 'main_desk')
+      : null;
+    const deskWaypoint = Array.isArray(_roomConfig.waypoints)
+      ? _roomConfig.waypoints.find((waypoint) => waypoint.id === 'desk')
+      : null;
+    const roverDefault = mainDesk
+      ? { x_cm: mainDesk.x_cm + 25, y_cm: mainDesk.y_cm + mainDesk.h_cm - 24 }
+      : (deskWaypoint ? { x_cm: deskWaypoint.x_cm + 25, y_cm: deskWaypoint.y_cm - 64 } : null);
+
+    if (roverDefault) {
+      return {
+        x_cm: roverDefault.x_cm,
+        y_cm: roverDefault.y_cm,
+        theta_deg: 0,
+        fixed: false,
+        source: 'room_config',
+        status: 'idle',
+        motion: null,
+      };
+    }
+  }
+
+  return null;
+}
+
+function _collectRenderableDevices(spatial, devicesData) {
+  const deviceIds = new Set(KNOWN_DEVICE_IDS);
+
+  if (_roomConfig && _roomConfig.anchors) {
+    for (const deviceId of Object.keys(_roomConfig.anchors)) {
+      deviceIds.add(deviceId);
+    }
+  }
+
+  if (spatial && spatial.devices) {
+    for (const deviceId of Object.keys(spatial.devices)) {
+      deviceIds.add(deviceId);
+    }
+  }
+
+  if (Array.isArray(devicesData)) {
+    for (const device of devicesData) {
+      if (device && device.device_id) {
+        deviceIds.add(device.device_id);
+      }
+    }
+  }
+
+  const renderable = [];
+
+  for (const deviceId of deviceIds) {
+    const fallback = _fallbackSpatialForDevice(deviceId);
+    const spatialInfo = spatial && spatial.devices ? spatial.devices[deviceId] : null;
+    const info = { ...(fallback || {}), ...(spatialInfo || {}) };
+
+    if (typeof info.x_cm !== 'number' || typeof info.y_cm !== 'number') continue;
+
+    if (typeof info.fixed !== 'boolean') {
+      info.fixed = deviceId !== 'rover';
+    }
+
+    if (typeof info.theta_deg !== 'number') {
+      info.theta_deg = 0;
+    }
+
+    if (!info.status) {
+      info.status = _lastDeviceStatuses[deviceId] || 'idle';
+    }
+
+    renderable.push([deviceId, info]);
+  }
+
+  return renderable;
+}
+
 // ── Update from polling data ────────────────────────────────────────
 
-export function updateMap(stateData, devicesData, recentDispatches) {
+export function updateMap(stateData, devicesData, recentDispatches, overlayData = {}) {
   if (!_initialized) return;
 
   _lastDevicesData = devicesData;
+  _lastOverlayData = overlayData || {};
+  _lastDeviceStatuses = {};
+
+  if (Array.isArray(devicesData)) {
+    for (const device of devicesData) {
+      _lastDeviceStatuses[device.device_id] = device.status || 'idle';
+    }
+  }
 
   // Extract spatial data
   const spatial = (stateData && stateData.spatial) || null;
   _lastSpatial = spatial;
 
-  if (spatial && spatial.devices) {
-    for (const [deviceId, info] of Object.entries(spatial.devices)) {
+  for (const [deviceId, info] of _collectRenderableDevices(spatial, devicesData)) {
       const devEl = _getOrCreateDevice(deviceId);
 
       const x = info.x_cm;
       const y = info.y_cm;
       const theta = info.theta_deg || 0;
-      const status = info.status || 'idle';
+      const status = _lastDeviceStatuses[deviceId] || info.status || 'idle';
       const isFixed = info.fixed !== false;
 
       // Handle rover animation
@@ -637,12 +1093,18 @@ export function updateMap(stateData, devicesData, recentDispatches) {
 
       // Update status visuals
       _updateDeviceStatus(deviceId, status, devEl);
+      _updateDevicePanel(
+        deviceId,
+        deviceId === 'rover' && _roverAnimating ? _roverCurrentPos.x : x,
+        deviceId === 'rover' && _roverAnimating ? _roverCurrentPos.y : y,
+        status,
+        (_lastOverlayData.deviceActivity && _lastOverlayData.deviceActivity[deviceId]) || {},
+      );
 
       // Update cursor for draggable devices
       if (!isFixed) {
         devEl.group.style.cursor = 'grab';
       }
-    }
   }
 
   // Update user position
@@ -656,6 +1118,8 @@ export function updateMap(stateData, devicesData, recentDispatches) {
   if (Array.isArray(recentDispatches)) {
     _processDispatches(recentDispatches);
   }
+
+  _updateBrainOverlay(_lastOverlayData);
 }
 
 // ── Device status updates ───────────────────────────────────────────
@@ -668,20 +1132,24 @@ function _updateDeviceStatus(deviceId, status, devEl) {
   statusRing.classList.remove('ring-executing', 'ring-offline');
   speakIndicator.setAttribute('opacity', '0');
   icon.setAttribute('opacity', '1');
+  devEl.group.classList.remove('device-group--active', 'device-group--offline', 'device-group--speaking');
 
   switch (status) {
     case 'executing':
       statusRing.setAttribute('opacity', '1');
       statusRing.classList.add('ring-executing');
+      devEl.group.classList.add('device-group--active');
       break;
     case 'speaking':
       speakIndicator.setAttribute('opacity', '1');
+      devEl.group.classList.add('device-group--active', 'device-group--speaking');
       break;
     case 'offline':
       icon.setAttribute('opacity', '0.3');
       statusRing.setAttribute('stroke', 'var(--color-error)');
       statusRing.setAttribute('opacity', '0.6');
       statusRing.classList.add('ring-offline');
+      devEl.group.classList.add('device-group--offline');
       break;
     case 'idle':
     default:
@@ -844,8 +1312,9 @@ function _clearRoverPath() {
 
 function _processDispatches(dispatches) {
   const now = Date.now();
-  const centerX = _roomWidth / 2;
-  const centerY = _roomHeight / 2;
+  const origin = _brainOrigin();
+  const centerX = origin.x;
+  const centerY = origin.y;
 
   for (const dispatch of dispatches) {
     const pulseId = `${dispatch.device}-${dispatch.timestamp}-${dispatch.instruction}`;
@@ -890,15 +1359,32 @@ function _processDispatches(dispatches) {
     });
     _gPulses.appendChild(ring);
 
+    const beam = svgEl('line', {
+      x1: centerX,
+      y1: centerY,
+      x2: targetX,
+      y2: targetY,
+      stroke: color,
+      'stroke-width': '1.4',
+      opacity: '0.85',
+      'stroke-dasharray': '10 8',
+      class: 'command-beam',
+    });
+    _gPulses.appendChild(beam);
+
     _activePulses.push({
       dot: pulse,
       ring,
+      beam,
+      deviceId: dispatch.device,
       startX: centerX, startY: centerY,
       targetX, targetY,
       startTime: performance.now(),
       duration: 800,
       color,
     });
+
+    _setDevicePanelBurst(dispatch.device);
   }
 
   // Prevent unbounded growth
@@ -1117,6 +1603,14 @@ function _animationLoop(timestamp) {
       devEl.group.setAttribute('transform', `translate(${cx}, ${cy}) rotate(${angle})`);
     }
 
+    _updateDevicePanel(
+      'rover',
+      cx,
+      cy,
+      _lastDeviceStatuses.rover || 'executing',
+      (_lastOverlayData && _lastOverlayData.deviceActivity && _lastOverlayData.deviceActivity.rover) || {},
+    );
+
     // Update path line start to current pos
     if (_pathLine) {
       _pathLine.setAttribute('x1', cx);
@@ -1138,6 +1632,7 @@ function _animationLoop(timestamp) {
 
   // Animate command pulses
   _updatePulseAnimations(timestamp);
+  _positionBrainHud();
 
   // Periodically rebuild trail (throttled to avoid DOM thrash)
   if (timestamp - _lastTrailRender > 500) {
@@ -1157,10 +1652,11 @@ function _updatePulseAnimations(timestamp) {
       // Remove pulse
       p.dot.remove();
       p.ring.remove();
+      if (p.beam) p.beam.remove();
       _activePulses.splice(i, 1);
 
       // Flash the target device
-      const devId = Object.keys(DEVICE_COLORS).find(id => DEVICE_COLORS[id] === p.color);
+      const devId = p.deviceId;
       if (devId && _deviceGroups[devId]) {
         const sr = _deviceGroups[devId].statusRing;
         sr.setAttribute('opacity', '0.8');
@@ -1170,6 +1666,8 @@ function _updatePulseAnimations(timestamp) {
           sr.setAttribute('r', '14');
         }, 300);
       }
+
+      _setDevicePanelBurst(devId);
     } else {
       // Lerp dot position
       const x = p.startX + (p.targetX - p.startX) * t;
@@ -1183,6 +1681,29 @@ function _updatePulseAnimations(timestamp) {
       const ringR = 5 + t * 20;
       p.ring.setAttribute('r', ringR);
       p.ring.setAttribute('opacity', String(0.6 * (1 - t)));
+
+      if (p.beam) {
+        p.beam.setAttribute('opacity', String(0.85 * (1 - t * 0.35)));
+      }
     }
   }
+}
+
+function _timestampMs(value) {
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function _truncateText(value, maxLen) {
+  const text = typeof value === 'string' ? value : (value == null ? '' : String(value));
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen)}…`;
+}
+
+function _escapeHTML(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }

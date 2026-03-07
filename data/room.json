@@ -13,7 +13,7 @@
   "anchors": {
     "lamp": {"x_cm": 80, "y_cm": 170, "theta_deg": 0, "label": "Lamp"},
     "mirror": {"x_cm": 375, "y_cm": 40, "theta_deg": 180, "label": "Mirror"},
-    "radio": {"x_cm": 460, "y_cm": 300, "theta_deg": 270, "label": "Radio"}
+    "radio": {"x_cm": 420, "y_cm": 82, "theta_deg": 270, "label": "Radio"}
   },
   "waypoints": [
     {"id": "dock", "x_cm": 60, "y_cm": 350, "label": "Dock"},
