@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Radio Device - Local Test</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=4" />
   </head>
   <body>
     <main class="wrap">
@@ -27,6 +27,12 @@
           <a id="spotifyTrackLink" class="spotify-link" href="#" target="_blank" rel="noopener noreferrer" style="display:none;">Open in Spotify</a>
           <audio id="audioPlayer" controls preload="auto" style="width:100%; margin-top:10px;"></audio>
           <div id="downloadLinks" class="meta"></div>
+          <div class="decision-box">
+            <div class="decision-title">LLM Decision</div>
+            <div class="decision-line"><span class="decision-key">LLM output</span><span id="llmDecisionRaw" class="decision-value">No decision yet.</span></div>
+            <div class="decision-line"><span class="decision-key">Applied option</span><span id="llmDecisionApplied" class="decision-value">No decision yet.</span></div>
+            <div class="decision-line"><span class="decision-key">Source</span><span id="llmDecisionSource" class="decision-value">n/a</span></div>
+          </div>
           <div class="meta" id="status">Idle</div>
           <pre id="result">No output yet.</pre>
         </section>
@@ -34,6 +40,6 @@
     </main>
 
     <script src="https://sdk.scdn.co/spotify-player.js"></script>
-    <script src="/static/main.js"></script>
+    <script src="/static/main.js?v=4"></script>
   </body>
 </html>

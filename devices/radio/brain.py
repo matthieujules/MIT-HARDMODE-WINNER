@@ -1,486 +1,555 @@
-import base64
-import concurrent.futures
-import json
+from __future__ import annotations
+
 import os
-import random
-import time
+import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Literal
-
-#when this have to connect to the raspberry pi it needs to accept central command from the central command 
-
-import httpx
-from dotenv import load_dotenv
-from pydantic import BaseModel, Field
-
-RADIO_DIR = Path(__file__).parent
-OUTPUT_DIR = RADIO_DIR / "output"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-DIAL_STEP_DEGREES = 55
-
-load_dotenv(RADIO_DIR / ".env")
+from typing import Any
 
 
-class PodcastClip(BaseModel):
-    text: str
-    delivery_style: str = "neutral podcast"
-    instructions: str = "Speak like a warm podcast host."
-    voice: str = "nova"
+RADIO_DIR = Path(__file__).resolve().parent
+SOUNDS_DIR = RADIO_DIR / "Sounds"
+
+MUSIC_CODES = ("A", "B", "C", "D", "E", "F", "G")
 
 
-class RadioPlan(BaseModel):
-    action: Literal["output_music", "output_podcast"]
-    turn_radio: bool = True
-    spotify_query: str = ""
-    spotify_market: str = "US"
-    spotify_limit: int = Field(default=1, ge=1, le=5)
-    podcast_clips: List[PodcastClip] = Field(default_factory=list)
+@dataclass(frozen=True)
+class AudioChoice:
+	code: str
+	path: Path
+	kind: str  # "music" | "soundbite" | "glitch"
+	label: str
 
 
-def fallback_plan(command: str) -> RadioPlan:
-    lower = command.lower()
-    if any(word in lower for word in ["podcast", "news", "talk", "story"]):
-        return RadioPlan(
-            action="output_podcast",
-            turn_radio=True,
-            podcast_clips=[
-                PodcastClip(
-                    text="Welcome back to today's home update",
-                    delivery_style="cheerful podcast",
-                    instructions="Speak like a cheerful podcast host. Warm, natural, conversational, fast pace.",
-                    voice="marin",
-                ),
-                PodcastClip(
-                    text="Main story now from your smart home",
-                    delivery_style="serious podcast",
-                    instructions="Speak like a thoughtful podcast host. Warm, natural, conversational, medium pace.",
-                    voice="onyx",
-                ),
-                PodcastClip(
-                    text="That wraps this segment for now",
-                    delivery_style="fun podcast",
-                    instructions="Speak like a witty podcast host. Conversational and playful, quick pace.",
-                    voice="fable",
-                ),
-            ],
-        )
-
-    cleaned = command.strip() or "chill lo-fi"
-    return RadioPlan(
-        action="output_music",
-        turn_radio=True,
-        spotify_query=cleaned,
-        spotify_market="US",
-        spotify_limit=1,
-    )
+@dataclass(frozen=True)
+class SelectionDecision:
+	final_token: str
+	llm_raw_output: str | None
+	llm_token: str | None
+	source: str
+	llm_called: bool
 
 
-def normalize_podcast_clips(plan: RadioPlan) -> RadioPlan:
-    if plan.action != "output_podcast":
-        return plan
+def _load_choices() -> tuple[dict[str, AudioChoice], AudioChoice | None]:
+	choices: dict[str, AudioChoice] = {}
+	glitch: AudioChoice | None = None
 
-    normalized = list(plan.podcast_clips)
+	if not SOUNDS_DIR.exists():
+		return choices, glitch
 
-    if len(normalized) > 4:
-        normalized = normalized[:4]
+	for path in sorted(SOUNDS_DIR.glob("*.mp3"), key=lambda item: item.name.lower()):
+		stem = path.stem
 
-    while len(normalized) < 2:
-        if normalized:
-            base_clip = normalized[-1]
-            next_text = "Next short update from your radio"
-            normalized.append(
-                PodcastClip(
-                    text=next_text,
-                    delivery_style=base_clip.delivery_style,
-                    instructions=base_clip.instructions,
-                    voice=base_clip.voice or "nova",
-                )
-            )
-        else:
-            normalized.append(
-                PodcastClip(
-                    text="Quick update from your home radio",
-                    delivery_style="neutral podcast",
-                    instructions="Speak like a concise podcast host. Warm and conversational, fast pace.",
-                    voice="nova",
-                )
-            )
+		if re.match(r"^00(?:_|$)", stem):
+			label = re.sub(r"^00_?", "", stem).strip() or "Glitch"
+			glitch = AudioChoice(code="00", path=path, kind="glitch", label=label)
+			continue
 
-    for clip in normalized:
-        style = (clip.delivery_style or "").strip()
-        clip.delivery_style = style if style.endswith(" podcast") else f"{style or 'neutral'} podcast"
-        if not clip.instructions.strip():
-            clip.instructions = f"Speak like a {clip.delivery_style} podcast host. Warm, natural, conversational, fast pace."
+		music_match = re.match(r"^([A-G])_", stem)
+		if music_match:
+			code = music_match.group(1)
+			if code in MUSIC_CODES and code not in choices:
+				label = re.sub(r"^[A-G]_", "", stem).replace("_", " ").strip()
+				choices[code] = AudioChoice(code=code, path=path, kind="music", label=label)
+			continue
 
-    plan.podcast_clips = normalized
-    return plan
+		bite_match = re.match(r"^(\d{1,2})_", stem)
+		if bite_match:
+			code = bite_match.group(1)
+			if code != "00" and code not in choices:
+				label = re.sub(r"^\d{1,2}_", "", stem).replace("_", " ").strip()
+				choices[code] = AudioChoice(code=code, path=path, kind="soundbite", label=label)
+
+	return choices, glitch
 
 
-def normalize_voice(voice: str, default_voices: List[str]) -> str:
-    alias_map = {
-        "male": "onyx",
-        "man": "onyx",
-        "female": "nova",
-        "woman": "nova",
-        "robot": "echo",
-        "robotic": "echo",
-        "funny": "fable",
-        "calm": "sage",
-        "child": "coral",
-    }
-    lowered = (voice or "").strip().lower()
-    mapped = alias_map.get(lowered, lowered)
-    return mapped if mapped in default_voices else ""
+def _is_stop_request(request: str) -> bool:
+	return bool(re.search(r"\b(stop|pause|hold)\b", request, flags=re.IGNORECASE))
 
 
-def openai_plan_call(command: str) -> RadioPlan:
-    openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    openai_plan_model = os.getenv("OPENAI_PLAN_MODEL", "gpt-4.1-mini").strip()
-
-    if not openai_api_key:
-        raise ValueError("OPENAI_API_KEY is missing")
-
-    system_prompt = (
-        "You are the radio planning model. "
-        "Return only a valid JSON object that strictly matches the provided schema."
-    )
-    user_prompt = (
-        "Plan one radio action from this command.\n"
-        "Rules:\n"
-        "- action must be output_music or output_podcast\n"
-        "- turn_radio must always be true\n"
-        "- if output_music: fill spotify_query, spotify_market, spotify_limit\n"
-        "- if output_podcast: return 2-4 clips\n"
-        "- each podcast clip text must be between 5 and 8 words\n"
-        "- each podcast clip must include delivery_style, instructions, and voice\n"
-        "- delivery_style must be adjective + ' podcast' (examples: fun podcast, sad podcast, serious podcast)\n"
-        "- voice must be one of: alloy, ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer, verse, marin, cedar\n"
-        "- when possible, vary male and female voices across clips\n"
-        "- instructions must be different per clip and describe how to speak that clip\n"
-        f"Command: {command}"
-    )
-
-    plan_schema = {
-        "name": "radio_plan",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "action": {"type": "string", "enum": ["output_music", "output_podcast"]},
-                "turn_radio": {"type": "boolean"},
-                "spotify_query": {"type": "string"},
-                "spotify_market": {"type": "string"},
-                "spotify_limit": {"type": "integer", "minimum": 1, "maximum": 5},
-                "podcast_clips": {
-                    "type": "array",
-                    "minItems": 2,
-                    "maxItems": 4,
-                    "items": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {
-                            "text": {"type": "string", "minLength": 5, "maxLength": 80},
-                            "delivery_style": {"type": "string"},
-                            "instructions": {"type": "string"},
-                            "voice": {
-                                "type": "string",
-                                "enum": [
-                                    "alloy",
-                                    "ash",
-                                    "ballad",
-                                    "coral",
-                                    "echo",
-                                    "fable",
-                                    "onyx",
-                                    "nova",
-                                    "sage",
-                                    "shimmer",
-                                    "verse",
-                                    "marin",
-                                    "cedar"
-                                ]
-                            },
-                        },
-                        "required": ["text", "delivery_style", "instructions", "voice"],
-                    },
-                },
-            },
-            "required": [
-                "action",
-                "turn_radio",
-                "spotify_query",
-                "spotify_market",
-                "spotify_limit",
-                "podcast_clips",
-            ],
-        },
-    }
-
-    with httpx.Client(timeout=30.0) as client:
-        response = client.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {openai_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": openai_plan_model,
-                "temperature": 0.2,
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": plan_schema,
-                },
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    message = ((data.get("choices") or [{}])[0]).get("message", {})
-    content = message.get("content", "")
-    plan_json = json.loads(content)
-    return RadioPlan.model_validate(plan_json)
+def _is_explicit_music_request(request: str) -> bool:
+	return bool(re.search(r"\b(song|music)\b", request, flags=re.IGNORECASE))
 
 
-def llm_call(command: str) -> RadioPlan:
-    try:
-        return normalize_podcast_clips(openai_plan_call(command))
-    except Exception:
-        return normalize_podcast_clips(fallback_plan(command))
+def _phrase_match_score(request_text: str, phrase_text: str) -> float:
+	request_terms = _tokenize_text(request_text)
+	phrase_terms = _tokenize_text(phrase_text)
+	if not request_terms or not phrase_terms:
+		return 0.0
+	overlap = len(request_terms.intersection(phrase_terms))
+	return overlap / len(phrase_terms)
 
 
-def output_music(plan: RadioPlan) -> Dict[str, Any]:
-    client_id = os.getenv("SPOTIFY_CLIENT_ID", "").strip()
-    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "").strip()
+def _sanitize_llm_token(raw: str, allowed: set[str]) -> str | None:
+	text = (raw or "").strip().upper()
+	if not text:
+		return None
 
-    payload: Dict[str, Any] = {
-        "function": "output_music",
-        "turn_radio": plan.turn_radio,
-        "dial_events": [
-            {
-                "event": "music_function_called",
-                "degrees": DIAL_STEP_DEGREES,
-            }
-        ],
-        "spotify_fields": {
-            "query": plan.spotify_query,
-            "market": plan.spotify_market,
-            "limit": plan.spotify_limit,
-        },
-    }
+	if re.search(r"\bSTOP\b", text):
+		return "stop"
 
-    if not client_id or not client_secret:
-        payload["spotify_api"] = "skipped_missing_credentials"
-        payload["playback"] = {
-            "type": "music",
-            "status": "playing_simulated",
-            "message": "Playing music (simulated). Add Spotify keys to stream previews.",
-            "audio_url": None,
-            "dial_events": payload["dial_events"],
-        }
-        return payload
+	if text in allowed:
+		return text
 
-    token_url = "https://accounts.spotify.com/api/token"
-    search_url = "https://api.spotify.com/v1/search"
-    basic = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("utf-8")
+	for allowed_token in allowed:
+		if allowed_token.isdigit() and text == str(int(allowed_token)):
+			return allowed_token
 
-    try:
-        with httpx.Client(timeout=20.0) as client:
-            token_resp = client.post(
-                token_url,
-                headers={"Authorization": f"Basic {basic}"},
-                data={"grant_type": "client_credentials"},
-            )
-            token_resp.raise_for_status()
-            access_token = token_resp.json()["access_token"]
+	for token in re.findall(r"[A-Z0-9]+", text):
+		if token.isdigit():
+			for allowed_token in allowed:
+				if allowed_token.isdigit() and int(token) == int(allowed_token):
+					return allowed_token
+		if token in allowed:
+			return token
 
-            search_resp = client.get(
-                search_url,
-                headers={"Authorization": f"Bearer {access_token}"},
-                params={
-                    "q": plan.spotify_query,
-                    "type": "track",
-                    "market": plan.spotify_market,
-                    "limit": max(plan.spotify_limit, 20),
-                },
-            )
-            search_resp.raise_for_status()
-            search_data = search_resp.json()
+	for match in re.finditer(r"\b[A-G]\b|\b\d{1,2}\b", text):
+		token = match.group(0)
+		if token.isdigit():
+			for allowed_token in allowed:
+				if allowed_token.isdigit() and int(token) == int(allowed_token):
+					return allowed_token
+		if token in allowed:
+			return token
 
-        tracks = search_data.get("tracks", {}).get("items") or []
-        first_track = tracks[0] if tracks else None
-        preview_track = next((track for track in tracks if track and track.get("preview_url")), None)
-        selected_track = preview_track or first_track
-        preview_url = selected_track.get("preview_url") if selected_track else None
-        preview_candidates = len([track for track in tracks if track and track.get("preview_url")])
-
-        payload["spotify_api"] = "ok"
-        payload["track"] = selected_track
-        payload["playback"] = {
-            "type": "music",
-            "status": "playing" if preview_url else "no_audio_available",
-            "message": "Playing track preview in browser." if preview_url else "No Spotify preview URL found in search results, so browser cannot play music audio.",
-            "audio_url": preview_url,
-            "preview_tracks_found": preview_candidates,
-            "dial_events": payload["dial_events"],
-        }
-        return payload
-    except Exception as exc:
-        payload["spotify_api"] = f"error: {exc}"
-        payload["playback"] = {
-            "type": "music",
-            "status": "error",
-            "message": f"Spotify error: {exc}",
-            "audio_url": None,
-            "dial_events": payload["dial_events"],
-        }
-        return payload
+	return None
 
 
-def output_podcast(plan: RadioPlan) -> Dict[str, Any]:
-    openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    openai_tts_model = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip()
-    default_voices = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse", "marin", "cedar"]
-    male_voices = ["ash", "echo", "fable", "onyx", "cedar", "verse"]
-    female_voices = ["alloy", "ballad", "coral", "nova", "sage", "shimmer", "marin"]
+def _extract_output_text(response: Any) -> str:
+	output_text = getattr(response, "output_text", None)
+	if isinstance(output_text, str) and output_text.strip():
+		return output_text.strip()
 
-    payload: Dict[str, Any] = {
-        "function": "output_podcast",
-        "turn_radio": plan.turn_radio,
-        "clips_requested": [clip.model_dump() for clip in plan.podcast_clips],
-        "clips_generated": [],
-        "audio_items": [],
-        "dial_events": [],
-    }
+	output = getattr(response, "output", None)
+	if not output:
+		return ""
 
-    if not openai_api_key:
-        payload["openai_tts_api"] = "skipped_missing_credentials"
-        payload["playback"] = {
-            "type": "podcast",
-            "status": "playing_simulated",
-            "message": "Playing podcast (simulated). Add OpenAI key for real clips.",
-            "audio_queue": [],
-            "dial_events": [
-                {
-                    "event": "tts_function_called",
-                    "clip_index": idx + 1,
-                    "degrees": DIAL_STEP_DEGREES,
-                }
-                for idx in range(len(plan.podcast_clips))
-            ],
-        }
-        return payload
-
-    headers = {
-        "Authorization": f"Bearer {openai_api_key}",
-        "Content-Type": "application/json",
-        "Accept": "audio/mpeg",
-    }
-
-    request_id = int(time.time() * 1000)
-    start_gender = random.choice(["male", "female"])
-
-    clip_jobs = []
-    for idx, clip in enumerate(plan.podcast_clips, start=1):
-        planned_voice = normalize_voice(clip.voice, default_voices)
-        target_gender = start_gender if idx % 2 == 1 else ("female" if start_gender == "male" else "male")
-        gender_pool = male_voices if target_gender == "male" else female_voices
-        selected_voice = planned_voice if planned_voice else random.choice(gender_pool)
-        clip_jobs.append((idx, clip, selected_voice))
-        payload["dial_events"].append(
-            {
-                "event": "tts_function_called",
-                "clip_index": idx,
-                "degrees": DIAL_STEP_DEGREES,
-            }
-        )
-
-    def synthesize_clip(job: tuple[int, PodcastClip, str]) -> Dict[str, Any]:
-        idx, clip, selected_voice = job
-        out_file = OUTPUT_DIR / f"podcast_{request_id}_{idx}.mp3"
-        try:
-            with httpx.Client(timeout=45.0) as client:
-                resp = client.post(
-                    "https://api.openai.com/v1/audio/speech",
-                    headers=headers,
-                    json={
-                        "model": openai_tts_model,
-                        "voice": selected_voice,
-                        "input": clip.text,
-                        "instructions": clip.instructions,
-                        "speed": 1.4,
-                        "response_format": "mp3",
-                    },
-                )
-                resp.raise_for_status()
-
-            out_file.write_bytes(resp.content)
-            return {
-                "index": idx,
-                "text": clip.text,
-                "delivery_style": clip.delivery_style,
-                "instructions": clip.instructions,
-                "voice": clip.voice,
-                "selected_voice": selected_voice,
-                "audio_url": f"/output/{out_file.name}",
-                "audio_file": str(out_file),
-            }
-        except Exception as exc:
-            return {
-                "index": idx,
-                "text": clip.text,
-                "delivery_style": clip.delivery_style,
-                "instructions": clip.instructions,
-                "voice": clip.voice,
-                "selected_voice": selected_voice,
-                "error": str(exc),
-            }
-
-    max_workers = min(4, max(1, len(clip_jobs)))
-    results_by_index: Dict[int, Dict[str, Any]] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_map = {executor.submit(synthesize_clip, job): job[0] for job in clip_jobs}
-        for future in concurrent.futures.as_completed(future_map):
-            result = future.result()
-            results_by_index[result["index"]] = result
-
-    for idx in sorted(results_by_index.keys()):
-        result = results_by_index[idx]
-        payload["clips_generated"].append(result)
-        if result.get("audio_url"):
-            payload["audio_items"].append(
-                {
-                    "index": idx,
-                    "audio_url": result["audio_url"],
-                    "audio_file": result["audio_file"],
-                }
-            )
-
-    payload["openai_tts_api"] = "ok"
-    payload["playback"] = {
-        "type": "podcast",
-        "status": "playing" if payload["clips_generated"] else "playing_no_audio",
-        "message": "Playing generated podcast clips in browser.",
-        "audio_queue": [clip["audio_url"] for clip in payload["clips_generated"] if clip.get("audio_url")],
-        "audio_items": payload["audio_items"],
-        "dial_events": payload["dial_events"],
-    }
-    return payload
+	chunks: list[str] = []
+	for item in output:
+		content = getattr(item, "content", None) or []
+		for piece in content:
+			text_value = getattr(piece, "text", None)
+			if text_value:
+				chunks.append(str(text_value))
+	return "\n".join(chunks).strip()
 
 
-def run_radio_command(command: str) -> Dict[str, Any]:
-    plan = llm_call(command)
+def _tokenize_text(text: str) -> set[str]:
+	return {token for token in re.findall(r"[a-z0-9]+", text.lower()) if token}
 
-    if plan.action == "output_music":
-        execution = output_music(plan)
-    else:
-        execution = output_podcast(plan)
 
-    return {
-        "plan": plan.model_dump(),
-        "execution": execution,
-    }
+REQUEST_TERM_ALIASES: dict[str, set[str]] = {
+	"energetic": {"cheerful", "happy", "rage", "anger", "funny", "workout", "hype"},
+	"workout": {"energetic", "rage", "anger", "hype"},
+	"happy": {"cheerful", "funny", "happy"},
+	"sad": {"sad"},
+	"scary": {"scary", "thriller"},
+	"romantic": {"romantic", "romatic", "love"},
+	"calm": {"classic", "chill", "lofi"},
+	"chill": {"classic", "calm", "lofi"},
+	"lofi": {"chill", "calm", "classic"},
+}
+
+
+def _expand_request_terms(request_terms: set[str]) -> set[str]:
+	expanded = set(request_terms)
+	for term in request_terms:
+		expanded.update(REQUEST_TERM_ALIASES.get(term, set()))
+	return expanded
+
+
+def _stable_request_index(request: str, count: int) -> int:
+	if count <= 0:
+		return 0
+	value = sum(ord(char) for char in request)
+	return value % count
+
+
+def _choose_code_by_metadata(request: str, allowed_codes: list[str], choices: dict[str, AudioChoice]) -> str:
+	if not allowed_codes:
+		return "1"
+
+	request_terms = _expand_request_terms(_tokenize_text(request))
+
+	if ("energetic" in request_terms or "workout" in request_terms or "hype" in request_terms) and "B" in allowed_codes:
+		return "B"
+	if ("happy" in request_terms or "cheerful" in request_terms) and "E" in allowed_codes:
+		return "E"
+	if ("scary" in request_terms or "thriller" in request_terms) and "C" in allowed_codes:
+		return "C"
+	if "sad" in request_terms and "F" in allowed_codes:
+		return "F"
+	if ("romantic" in request_terms or "romatic" in request_terms or "love" in request_terms) and "G" in allowed_codes:
+		return "G"
+
+	scored: list[tuple[int, str]] = []
+	for code in allowed_codes:
+		choice = choices.get(code)
+		if choice is None:
+			scored.append((0, code))
+			continue
+		label_terms = _expand_request_terms(_tokenize_text(choice.label))
+		score = len(request_terms.intersection(label_terms))
+		scored.append((score, code))
+
+	best_score = max(score for score, _ in scored)
+	best_codes = [code for score, code in scored if score == best_score]
+	if best_score > 0 and best_codes:
+		return best_codes[0]
+
+	return allowed_codes[_stable_request_index(request, len(allowed_codes))]
+
+
+def _phrase_override_token(request: str, choices: dict[str, AudioChoice]) -> str | None:
+	text = re.sub(r"\s+", " ", request.lower()).strip()
+
+	if not _is_stop_request(text) and re.search(r"\b(hi|hello|hey)\b", text):
+		if "09" in choices:
+			return "09"
+
+	rules = [
+		("omg my date is here", "19"),
+		("guys you gotta help me", "07"),
+		("interesting house you've got", "03"),
+		("interesting house you’ve got", "03"),
+	]
+
+	for phrase, token in rules:
+		if (phrase in text or _phrase_match_score(text, phrase) >= 0.66) and token in choices:
+			return token
+
+	return None
+
+
+def _choose_code_with_llm(request: str, allowed_codes: list[str], choices: dict[str, AudioChoice]) -> SelectionDecision:
+	fallback = _choose_code_by_metadata(request, allowed_codes, choices)
+	allowed = set(allowed_codes)
+
+	api_key = os.getenv("OPENAI_API_KEY", "").strip()
+	if not api_key:
+		return SelectionDecision(
+			final_token=fallback,
+			llm_raw_output=None,
+			llm_token=None,
+			source="fallback:no_api_key",
+			llm_called=False,
+		)
+
+	try:
+		from openai import OpenAI  # type: ignore
+	except Exception:
+		return SelectionDecision(
+			final_token=fallback,
+			llm_raw_output=None,
+			llm_token=None,
+			source="fallback:openai_import_error",
+			llm_called=False,
+		)
+
+	model = os.getenv("OPENAI_PLAN_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+	options_text = "\n".join(
+		f"- {code}: {choices.get(code).label if choices.get(code) else 'unknown option'}"
+		for code in allowed_codes
+	)
+	system_prompt = (
+		"You route radio requests to one exact token. "
+		"Return ONLY one token in strict format: an UPPERCASE letter A-G, or a numeric clip token (for example 03, 07, 19). "
+		"Do not return lowercase letters, punctuation, JSON, or extra words."
+	)
+	user_prompt = (
+		f"Request: {request}\n"
+		"Available options from the Sounds folder:\n"
+		f"{options_text}\n"
+		f"Allowed tokens (strict): {', '.join(allowed_codes)}\n"
+		"Special mappings:\n"
+		"- if request means 'Omg my date is here' (or close paraphrase) -> 19\n"
+		"- if request means 'Guys you gotta help me' (or close paraphrase) -> 07\n"
+		"- if request means 'Interesting House you've got' (or close paraphrase) -> 03\n"
+		"- if request means 'hi/hello/hey' -> 09\n"
+		"Output STOP for explicit stop intents: stop, pause, hold.\n"
+		"Output rule: respond with exactly one token only, no explanation.\n"
+		"Examples of valid outputs: A, C, 03, 07, 19, STOP"
+	)
+
+	client = OpenAI(api_key=api_key)
+
+	response_errors: list[str] = []
+
+	try:
+		response = client.responses.create(
+			model=model,
+			temperature=0,
+			max_output_tokens=8,
+			input=[
+				{"role": "system", "content": system_prompt},
+				{"role": "user", "content": user_prompt},
+			],
+		)
+		text = _extract_output_text(response)
+		parsed = _sanitize_llm_token(text, allowed)
+		if parsed is not None:
+			return SelectionDecision(
+				final_token=parsed,
+				llm_raw_output=text,
+				llm_token=parsed,
+				source="llm:responses",
+				llm_called=True,
+			)
+		return SelectionDecision(
+			final_token=fallback,
+			llm_raw_output=text or "[empty-output]",
+			llm_token=None,
+			source="fallback:invalid_llm_output",
+			llm_called=True,
+		)
+	except Exception as exc:
+		response_errors.append(f"responses:{exc}")
+
+	try:
+		completion = client.chat.completions.create(
+			model=model,
+			temperature=0,
+			max_tokens=8,
+			messages=[
+				{"role": "system", "content": system_prompt},
+				{"role": "user", "content": user_prompt},
+			],
+		)
+		text = ((completion.choices[0].message.content or "") if completion.choices else "").strip()
+		parsed = _sanitize_llm_token(text, allowed)
+		if parsed is not None:
+			return SelectionDecision(
+				final_token=parsed,
+				llm_raw_output=text,
+				llm_token=parsed,
+				source="llm:chat_completions",
+				llm_called=True,
+			)
+		return SelectionDecision(
+			final_token=fallback,
+			llm_raw_output=text or "[empty-output]",
+			llm_token=None,
+			source="fallback:invalid_llm_output",
+			llm_called=True,
+		)
+	except Exception as exc:
+		response_errors.append(f"chat:{exc}")
+
+	error_text = " | ".join(response_errors) if response_errors else "unknown"
+	return SelectionDecision(
+		final_token=fallback,
+		llm_raw_output=f"[llm-error] {error_text}",
+		llm_token=None,
+		source="fallback:llm_exception",
+		llm_called=True,
+	)
+
+
+def select_audio_decision(request: str) -> SelectionDecision:
+	"""
+	Returns exactly one token for a scenario/situation request:
+	- "stop"
+	- "1".."5" for sound bites
+	- "A".."G" for music
+	"""
+	text = (request or "").strip()
+	if not text:
+		return SelectionDecision(
+			final_token="1",
+			llm_raw_output=None,
+			llm_token=None,
+			source="fallback:empty_request",
+			llm_called=False,
+		)
+
+	if _is_stop_request(text):
+		return SelectionDecision(
+			final_token="stop",
+			llm_raw_output="STOP",
+			llm_token="stop",
+			source="direct:stop_keyword",
+			llm_called=False,
+		)
+
+	choices, _ = _load_choices()
+	wants_music = _is_explicit_music_request(text)
+
+	override_token = _phrase_override_token(text, choices)
+	if override_token is not None:
+		return SelectionDecision(
+			final_token=override_token,
+			llm_raw_output=f"[phrase-rule] {override_token}",
+			llm_token=override_token,
+			source="rule:phrase_override",
+			llm_called=False,
+		)
+
+	if wants_music:
+		allowed_pool = list(MUSIC_CODES)
+	else:
+		numeric_codes = sorted(
+			[code for code, choice in choices.items() if choice.kind == "soundbite" and code.isdigit()],
+			key=lambda item: int(item),
+		)
+		allowed_pool = numeric_codes
+
+	allowed_codes = [code for code in allowed_pool if code in choices]
+	if not allowed_codes:
+		allowed_codes = list(allowed_pool)
+
+	decision = _choose_code_with_llm(text, allowed_codes, choices)
+	if decision.final_token == "stop" and not _is_stop_request(text):
+		fallback = _choose_code_by_metadata(text, allowed_codes, choices)
+		return SelectionDecision(
+			final_token=fallback,
+			llm_raw_output=decision.llm_raw_output,
+			llm_token=decision.llm_token,
+			source="fallback:blocked_non_explicit_stop",
+			llm_called=decision.llm_called,
+		)
+
+	return decision
+
+
+def _clip_entry(index: int, choice: AudioChoice) -> dict[str, Any]:
+	relative_file = f"Sounds/{choice.path.name}"
+	return {
+		"index": index,
+		"token": choice.code,
+		"kind": choice.kind,
+		"label": choice.label,
+		"file": relative_file,
+		"audio_file": relative_file,
+		"audio_url": None,
+		"text": choice.label,
+	}
+
+
+def run_radio_command(command: str) -> dict[str, Any]:
+	request = (command or "").strip()
+	choices, glitch = _load_choices()
+
+	if _is_stop_request(request):
+		stop_clips: list[dict[str, Any]] = []
+		if glitch is not None:
+			stop_clips.append(_clip_entry(1, glitch))
+		return {
+			"ok": True,
+			"command": request,
+			"selection": "stop",
+			"plan": {
+				"action": "stop_audio",
+				"turn_radio": False,
+				"selection": "stop",
+			},
+			"execution": {
+				"llm_called": False,
+				"llm_decision": "STOP",
+				"llm_token": "stop",
+				"final_selection": "stop",
+				"selection_source": "direct:stop_keyword",
+				"stop_requested": True,
+				"clips_generated": stop_clips,
+				"playback": {
+					"type": "stop",
+					"status": "stop_requested",
+					"audio_items": stop_clips,
+					"audio_queue": [],
+				},
+			},
+		}
+
+	pre_llm_glitch = _clip_entry(1, glitch) if glitch is not None else None
+	decision = select_audio_decision(request)
+	token = decision.final_token
+
+	if token == "stop":
+		stop_clips = [pre_llm_glitch] if pre_llm_glitch else []
+		return {
+			"ok": True,
+			"command": request,
+			"selection": "stop",
+			"plan": {
+				"action": "stop_audio",
+				"turn_radio": False,
+				"selection": "stop",
+			},
+			"execution": {
+				"llm_called": decision.llm_called,
+				"llm_decision": decision.llm_raw_output,
+				"llm_token": decision.llm_token,
+				"final_selection": "stop",
+				"selection_source": decision.source,
+				"stop_requested": True,
+				"pre_llm_glitch": pre_llm_glitch,
+				"clips_generated": stop_clips,
+				"playback": {
+					"type": "stop",
+					"status": "stop_requested",
+					"audio_items": stop_clips,
+					"audio_queue": [],
+				},
+			},
+		}
+
+	selected = choices.get(token)
+	if selected is None:
+		wants_music = _is_explicit_music_request(request)
+		if wants_music:
+			fallback_codes = list(MUSIC_CODES)
+		else:
+			fallback_codes = sorted(
+				[code for code, choice in choices.items() if choice.kind == "soundbite" and code.isdigit()],
+				key=lambda item: int(item),
+			)
+		selected = next((choices.get(code) for code in fallback_codes if code in choices), None)
+		if selected is None:
+			return {
+				"ok": False,
+				"error": "No matching audio files found in Sounds folder for the required naming format.",
+				"command": request,
+				"selection": token,
+			}
+
+	clips: list[dict[str, Any]] = []
+	next_index = 1
+	if pre_llm_glitch is not None:
+		clips.append(pre_llm_glitch)
+		next_index += 1
+
+	clips.append(_clip_entry(next_index, selected))
+	next_index += 1
+
+	if glitch is not None:
+		clips.append(_clip_entry(next_index, glitch))
+
+	playback_type = "music" if selected.kind == "music" else "podcast"
+	return {
+		"ok": True,
+		"command": request,
+		"selection": selected.code,
+		"plan": {
+			"action": "output_podcast",
+			"turn_radio": True,
+			"selection": selected.code,
+			"category": selected.kind,
+			"requires_explicit_music_keyword": True,
+		},
+		"execution": {
+			"llm_called": decision.llm_called,
+			"llm_decision": decision.llm_raw_output,
+			"llm_token": decision.llm_token,
+			"final_selection": selected.code,
+			"selection_source": decision.source,
+			"pre_llm_glitch": pre_llm_glitch,
+			"post_clip_glitch": _clip_entry(next_index, glitch) if glitch is not None else None,
+			"clips_generated": clips,
+			"playback": {
+				"type": playback_type,
+				"status": "queued_local_files",
+				"audio_items": clips,
+				"audio_queue": [],
+				"message": "Glitch plays before LLM return path and after selected clip.",
+			},
+		},
+	}

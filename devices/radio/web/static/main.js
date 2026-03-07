@@ -10,12 +10,20 @@ const replayBtn = document.getElementById('replayBtn');
 const spotifyTrackLink = document.getElementById('spotifyTrackLink');
 const audioPlayer = document.getElementById('audioPlayer');
 const downloadLinksEl = document.getElementById('downloadLinks');
+const llmDecisionRawEl = document.getElementById('llmDecisionRaw');
+const llmDecisionAppliedEl = document.getElementById('llmDecisionApplied');
+const llmDecisionSourceEl = document.getElementById('llmDecisionSource');
 let activeAudio = null;
 let currentDialAngle = 0;
 let lastPlaybackQueue = [];
 let lastPlaybackType = null;
 let lastPlan = {};
 let lastSpotifyTrackUri = null;
+let activeRequestId = 0;
+let lastRunClickAtMs = 0;
+let lastIssuedCommand = '';
+let waitingGlitchRequestId = 0;
+let waitingGlitchDialTimer = null;
 
 let spotifyClientId = null;
 let spotifyAccessToken = null;
@@ -36,10 +44,27 @@ function normalizeAudioUrl(url) {
   if (!url || typeof url !== 'string') {
     return null;
   }
-  if (url.startsWith('http://') || url.startsWith('https://')) {
-    return url;
+  const trimmed = url.trim();
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
   }
-  return `${window.location.origin}${url}`;
+  const withLeadingSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return encodeURI(`${window.location.origin}${withLeadingSlash}`);
+}
+
+function clipHasGlitch(item) {
+  if (!item) {
+    return false;
+  }
+  const token = String(item?.token || '').trim();
+  if (token === '00') {
+    return true;
+  }
+  if (item?.kind === 'glitch') {
+    return true;
+  }
+  const fileName = String(item?.file || item?.audio_file || item?.audio_url || '');
+  return /(^|\/)00(?:_|\.)/i.test(fileName);
 }
 
 function updateSpotifyStatus(text, connected = false) {
@@ -314,20 +339,105 @@ async function playSpotifyTrackUri(trackUri, plan) {
   return true;
 }
 
-function derivePlaybackQueue(data) {
-  const playbackQueue = data?.execution?.playback?.audio_queue || [];
-  const playbackItemsQueue = (data?.execution?.playback?.audio_items || [])
-    .map((item) => item?.audio_url)
+async function interruptCurrentPlayback() {
+  stopWaitingGlitch();
+  stopPlayback();
+  if (spotifyPlayer) {
+    try {
+      await spotifyPlayer.pause();
+    } catch (_err) {
+    }
+  }
+}
+
+function waitingGlitchUrl() {
+  return normalizeAudioUrl('/Sounds/00_Glitch.mp3');
+}
+
+function startWaitingGlitch(requestId) {
+  const glitchUrl = waitingGlitchUrl();
+  if (!glitchUrl) {
+    return;
+  }
+
+  stopWaitingGlitch();
+  waitingGlitchRequestId = requestId;
+  audioPlayer.loop = true;
+  audioPlayer.src = glitchUrl;
+  audioPlayer.load();
+  activeAudio = audioPlayer;
+
+  audioPlayer.play().catch(() => {
+  });
+
+  waitingGlitchDialTimer = setInterval(() => {
+    if (waitingGlitchRequestId !== requestId || requestId !== activeRequestId) {
+      return;
+    }
+    rotateDialBy(true, 18);
+  }, 230);
+}
+
+function stopWaitingGlitch(requestId = null) {
+  if (requestId !== null && waitingGlitchRequestId !== requestId) {
+    return;
+  }
+
+  if (waitingGlitchDialTimer) {
+    clearInterval(waitingGlitchDialTimer);
+    waitingGlitchDialTimer = null;
+  }
+
+  if (waitingGlitchRequestId !== 0) {
+    audioPlayer.loop = false;
+    const currentSrc = String(audioPlayer.src || '');
+    if (currentSrc.includes('/Sounds/00_') || currentSrc.includes('/Sounds/00.')) {
+      audioPlayer.pause();
+      audioPlayer.currentTime = 0;
+    }
+    waitingGlitchRequestId = 0;
+  }
+}
+
+function derivePlaybackItems(data) {
+  const playbackItems = data?.execution?.playback?.audio_items || [];
+  const generatedItems = data?.execution?.clips_generated || [];
+  const queueUrls = data?.execution?.playback?.audio_queue || [];
+  const sourceItems = playbackItems.length ? playbackItems : generatedItems;
+
+  if (sourceItems.length) {
+    return sourceItems
+      .map((item) => {
+        const raw = item?.audio_url || item?.file || item?.audio_file;
+        const audio_url = normalizeAudioUrl(raw);
+        if (!audio_url) {
+          return null;
+        }
+        return {
+          index: item?.index,
+          token: item?.token,
+          kind: item?.kind,
+          label: item?.label || item?.text || '',
+          file: item?.file || item?.audio_file || null,
+          audio_url
+        };
+      })
+      .filter(Boolean);
+  }
+
+  return queueUrls
+    .map((url, index) => {
+      const audio_url = normalizeAudioUrl(url);
+      if (!audio_url) {
+        return null;
+      }
+      return { index: index + 1, token: null, kind: null, label: '', file: null, audio_url };
+    })
     .filter(Boolean);
-  const generatedQueue = (data?.execution?.clips_generated || [])
-    .map((clip) => clip?.audio_url || clip?.file)
-    .filter(Boolean);
-  const chosen = playbackQueue.length ? playbackQueue : (playbackItemsQueue.length ? playbackItemsQueue : generatedQueue);
-  return chosen.map(normalizeAudioUrl).filter(Boolean);
 }
 
 function renderDownloadLinks(data) {
-  const items = data?.execution?.playback?.audio_items || [];
+  const items = derivePlaybackItems(data);
   if (!items.length) {
     downloadLinksEl.innerHTML = '';
     return;
@@ -336,7 +446,7 @@ function renderDownloadLinks(data) {
   const links = items
     .map((item) => {
       const index = item?.index ?? '?';
-      const url = normalizeAudioUrl(item?.audio_url);
+      const url = normalizeAudioUrl(item?.audio_url || item?.file || item?.audio_file);
       if (!url) {
         return '';
       }
@@ -373,6 +483,21 @@ function rotateDialBy(turnSignal, degrees) {
   dialMeta.textContent = `Turn signal: ${turnSignal ? 'ON' : 'OFF'}`;
 }
 
+function renderLlmDecision(data) {
+  if (!llmDecisionRawEl || !llmDecisionAppliedEl || !llmDecisionSourceEl) {
+    return;
+  }
+
+  const raw = data?.execution?.llm_decision;
+  const llmToken = data?.execution?.llm_token;
+  const applied = String(data?.execution?.final_selection || data?.selection || data?.plan?.selection || '').trim();
+  const source = String(data?.execution?.selection_source || 'unknown');
+
+  llmDecisionRawEl.textContent = raw ? String(raw) : 'No output returned';
+  llmDecisionAppliedEl.textContent = applied || 'No decision yet.';
+  llmDecisionSourceEl.textContent = llmToken ? `${source} (parsed token: ${llmToken})` : source;
+}
+
 async function runDecision() {
   const command = commandEl.value.trim();
   if (!command) {
@@ -380,8 +505,26 @@ async function runDecision() {
     return;
   }
 
+  const now = Date.now();
+  if (now - lastRunClickAtMs < 350) {
+    return;
+  }
+  lastRunClickAtMs = now;
+
+  const normalizedCommand = command.toLowerCase();
+  const isStopCommand = normalizedCommand.includes('stop');
+  const isHtmlAudioPlaying = !audioPlayer.paused && !audioPlayer.ended;
+  if (!isStopCommand && isHtmlAudioPlaying && normalizedCommand === lastIssuedCommand) {
+    statusEl.textContent = 'Already playing this request. Use stop or change the command.';
+    return;
+  }
+
+  lastIssuedCommand = normalizedCommand;
+  const requestId = ++activeRequestId;
+
+  await interruptCurrentPlayback();
+  startWaitingGlitch(requestId);
   statusEl.textContent = 'Running LLM + function route...';
-  runBtn.disabled = true;
 
   try {
     const res = await fetch('/api/radio/command', {
@@ -389,6 +532,11 @@ async function runDecision() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command })
     });
+
+    if (requestId !== activeRequestId) {
+      stopWaitingGlitch(requestId);
+      return;
+    }
 
     const raw = await res.text();
     let data = null;
@@ -404,16 +552,20 @@ async function runDecision() {
 
     const plan = data.plan || {};
     updateDial(plan.turn_radio);
+    renderLlmDecision(data);
     resultEl.textContent = JSON.stringify(data, null, 2);
-    await runPlayback(data);
+    stopWaitingGlitch(requestId);
+    await runPlayback(data, requestId);
   } catch (err) {
-    statusEl.textContent = `Error: ${err.message}`;
-  } finally {
-    runBtn.disabled = false;
+    stopWaitingGlitch(requestId);
+    if (requestId === activeRequestId) {
+      statusEl.textContent = `Error: ${err.message}`;
+    }
   }
 }
 
 function stopPlayback() {
+  audioPlayer.loop = false;
   audioPlayer.pause();
   audioPlayer.currentTime = 0;
   activeAudio = null;
@@ -436,12 +588,23 @@ async function applyDialEvent(event, plan) {
   await sleep(180);
 }
 
-async function playQueue(urls, onBeforeEach, onAfterEach) {
-  for (let index = 0; index < urls.length; index += 1) {
-    const url = urls[index];
+async function playQueue(items, onBeforeEach, onAfterEach, isActive = () => true) {
+  for (let index = 0; index < items.length; index += 1) {
+    if (!isActive()) {
+      return;
+    }
+
+    const item = items[index] || {};
+    const url = normalizeAudioUrl(item?.audio_url || item?.file || item?.audio_file);
+    if (!url) {
+      continue;
+    }
 
     if (typeof onBeforeEach === 'function') {
-      await onBeforeEach(index, urls.length);
+      await onBeforeEach(item, index, items.length);
+      if (!isActive()) {
+        return;
+      }
     }
 
     await new Promise(async (resolve) => {
@@ -458,17 +621,27 @@ async function playQueue(urls, onBeforeEach, onAfterEach) {
       }
     });
 
+    if (!isActive()) {
+      return;
+    }
+
     if (typeof onAfterEach === 'function') {
-      await onAfterEach(index, urls.length);
+      await onAfterEach(item, index, items.length);
     }
   }
 }
 
-async function runPlayback(data) {
+async function runPlayback(data, requestId) {
+  const isActive = () => requestId === activeRequestId;
+  if (!isActive()) {
+    return;
+  }
+
   const playback = data?.execution?.playback || {};
   const plan = data?.plan || {};
   const dialEvents = playback.dial_events || [];
   const trackUri = data?.execution?.track?.uri || null;
+  const queueItems = derivePlaybackItems(data);
   audioPlayer.volume = 1.0;
   audioPlayer.muted = false;
   lastPlan = plan;
@@ -477,18 +650,55 @@ async function runPlayback(data) {
   renderDownloadLinks(data);
   renderSpotifyTrackLink(data);
 
-  if (playback.type === 'music' && playback.audio_url) {
-    lastPlaybackQueue = [normalizeAudioUrl(playback.audio_url)].filter(Boolean);
-  } else if (playback.type === 'podcast') {
-    lastPlaybackQueue = derivePlaybackQueue(data);
-  } else {
-    lastPlaybackQueue = [];
-  }
+  lastPlaybackQueue = queueItems;
 
   replayBtn.disabled = lastPlaybackQueue.length === 0;
   if (!replayBtn.disabled) {
-    audioPlayer.src = lastPlaybackQueue[0];
+    audioPlayer.src = lastPlaybackQueue[0].audio_url;
     audioPlayer.load();
+  }
+
+  if (playback.type === 'stop') {
+    stopPlayback();
+    if (queueItems.length > 0) {
+      statusEl.textContent = 'Stopping audio...';
+      await playQueue(queueItems, async (item) => {
+        if (clipHasGlitch(item)) {
+          await applyDialEvent({ degrees: 22 }, plan);
+        }
+      }, undefined, isActive);
+      if (isActive()) {
+        statusEl.textContent = 'Audio stopped.';
+      }
+    } else {
+      statusEl.textContent = 'Audio stopped.';
+    }
+    return;
+  }
+
+  if (queueItems.length > 0) {
+    statusEl.textContent = 'Playing selected clips in browser.';
+    await playQueue(
+      queueItems,
+      async (item, index) => {
+        if (clipHasGlitch(item)) {
+          statusEl.textContent = 'Glitch cue...';
+          await applyDialEvent({ degrees: 22 }, plan);
+        } else {
+          const event = dialEvents[index] || { degrees: 55 };
+          await applyDialEvent(event, plan);
+          statusEl.textContent = 'Playing selected clips in browser.';
+        }
+      },
+      async () => {
+        await sleep(80);
+      },
+      isActive
+    );
+    if (isActive()) {
+      statusEl.textContent = 'Finished clip sequence.';
+    }
+    return;
   }
 
   if (playback.type === 'music') {
@@ -518,12 +728,12 @@ async function runPlayback(data) {
   }
 
   if (playback.type === 'podcast') {
-    const queue = derivePlaybackQueue(data);
+    const queue = derivePlaybackItems(data);
     if (queue.length > 0) {
       statusEl.textContent = 'Playing podcast clips in browser.';
       await playQueue(
         queue,
-        async (index) => {
+        async (_item, index) => {
           statusEl.textContent = 'Turning dial...';
           const event = dialEvents[index] || { degrees: 55 };
           await applyDialEvent(event, plan);
@@ -531,9 +741,12 @@ async function runPlayback(data) {
         },
         async () => {
           await sleep(100);
-        }
+        },
+        isActive
       );
-      statusEl.textContent = 'Finished podcast clip sequence.';
+      if (isActive()) {
+        statusEl.textContent = 'Finished podcast clip sequence.';
+      }
     } else {
       if (dialEvents.length > 0) {
         for (const event of dialEvents) {
@@ -564,7 +777,7 @@ async function replayLastAudio() {
 
   if (lastPlaybackType === 'music') {
     try {
-      await playAudio(lastPlaybackQueue[0]);
+      await playAudio(lastPlaybackQueue[0].audio_url);
       statusEl.textContent = 'Replaying music audio.';
     } catch (_err) {
       statusEl.textContent = 'Unable to replay music audio.';
@@ -573,9 +786,9 @@ async function replayLastAudio() {
   }
 
   statusEl.textContent = 'Replaying podcast clips...';
-  await playQueue(lastPlaybackQueue, async (index) => {
-    const event = { degrees: 55 };
-    await applyDialEvent(event, lastPlan);
+  await playQueue(lastPlaybackQueue, async (item) => {
+    const degrees = clipHasGlitch(item) ? 22 : 55;
+    await applyDialEvent({ degrees }, lastPlan);
   });
   statusEl.textContent = 'Replay complete.';
 }

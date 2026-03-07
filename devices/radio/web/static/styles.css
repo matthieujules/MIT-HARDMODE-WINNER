@@ -127,6 +127,44 @@ button:disabled {
   margin-right: 10px;
 }
 
+.decision-box {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #343b4f;
+  background: #0f1118;
+}
+
+.decision-title {
+  color: #a8b1c6;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.decision-value {
+  color: #f8fbff;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.decision-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.decision-key {
+  color: #a8b1c6;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 pre {
   margin-top: 12px;
   padding: 12px;
