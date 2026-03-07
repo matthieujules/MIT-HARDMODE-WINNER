@@ -210,6 +210,9 @@ async def _handle_manual_override(event: DeviceEvent) -> dict:
 
 # ── Master reasoning integration ──────────────────────────────────
 
+# Serial master lock — spec requires one reasoning turn at a time
+_master_lock = asyncio.Lock()
+
 # Devices that trigger voice lock when receiving spawn instructions
 _SPEAKING_DEVICES = {"mirror", "radio"}
 
@@ -226,6 +229,12 @@ async def _run_master_reasoning(event: DeviceEvent) -> dict:
     6. Parallel dispatch to different devices
     7. Sequential dispatch to same device
     """
+    async with _master_lock:
+        return await _run_master_reasoning_inner(event)
+
+
+async def _run_master_reasoning_inner(event: DeviceEvent) -> dict:
+    """Inner implementation, called under _master_lock."""
     try:
         result = execute_master_turn(state_manager, event)
     except Exception as e:
