@@ -10,6 +10,9 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from dotenv import load_dotenv
+
+load_dotenv()  # Must load before importing master (reads MASTER_MODEL, MASTER_PROVIDER)
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
@@ -29,8 +32,6 @@ from .schemas import (
     ManualOverridePayload,
 )
 from .state import StateManager
-
-load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

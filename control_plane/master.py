@@ -2,6 +2,7 @@
 
 Pure function module — does NOT import app.py or ConnectionManager.
 Takes a StateManager and DeviceEvent, returns structured data.
+Supports Anthropic (Claude) and OpenAI-compatible providers (Cerebras).
 """
 
 import json
@@ -11,14 +12,28 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
-import anthropic
-
 from .schemas import DeviceEvent
 from .state import StateManager
 
 logger = logging.getLogger(__name__)
 
-# ── Master tools (Anthropic API format) ───────────────────────────
+# ── Configuration ────────────────────────────────────────────────
+
+_MODEL = os.getenv("MASTER_MODEL", "claude-sonnet-4-6")
+_PROVIDER = os.getenv("MASTER_PROVIDER", "auto")  # "anthropic", "cerebras", or "auto"
+_BETA_HEADER = "context-1m-2025-08-07"
+_CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
+
+
+def _detect_provider() -> str:
+    if _PROVIDER != "auto":
+        return _PROVIDER
+    if "claude" in _MODEL:
+        return "anthropic"
+    return "cerebras"
+
+
+# ── Master tools (canonical format — Anthropic-style) ─────────────
 
 MASTER_TOOLS = [
     {
@@ -123,6 +138,24 @@ _SEND_TOOL_DEVICE_MAP = {
     "send_to_rover": "rover",
 }
 
+# ── Tool format conversion ───────────────────────────────────────
+
+
+def _tools_to_openai(tools: list[dict]) -> list[dict]:
+    """Convert Anthropic-format tools to OpenAI-format for Cerebras."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["input_schema"],
+            },
+        }
+        for t in tools
+    ]
+
+
 # ── Prompt assembly ───────────────────────────────────────────────
 
 _SOUL_DIR = Path(__file__).parent
@@ -144,12 +177,10 @@ _LIMITS = {
 }
 
 
-def assemble_prompt(state_manager: StateManager, triggering_event: DeviceEvent) -> list[dict]:
+def assemble_prompt(state_manager: StateManager, triggering_event: DeviceEvent) -> dict:
     """Build the master prompt messages per spec §13 Assembly Order.
 
-    Returns a list of message dicts for the Anthropic API.
-    The system prompt is the master SOUL.md.
-    The user message contains all context sources + triggering event.
+    Returns a dict with "system" and "messages" keys.
     """
     sections: list[str] = []
 
@@ -201,17 +232,13 @@ def assemble_prompt(state_manager: StateManager, triggering_event: DeviceEvent) 
     }
 
 
-# ── API call ──────────────────────────────────────────────────────
-
-_MODEL = os.getenv("MASTER_MODEL", "claude-sonnet-4-6")
-_BETA_HEADER = "context-1m-2025-08-07"
+# ── API calls ─────────────────────────────────────────────────────
 
 
-def call_master(prompt: dict, tools: list[dict] = MASTER_TOOLS) -> anthropic.types.Message:
-    """Call Claude Opus 4.6 with the assembled prompt and tools.
+def _call_anthropic(prompt: dict, tools: list[dict]) -> dict:
+    """Call Anthropic Claude API. Returns normalized response dict."""
+    import anthropic
 
-    Uses tool_choice={"type": "any"} to force tool use (no prose).
-    """
     client = anthropic.Anthropic()
     response = client.messages.create(
         model=_MODEL,
@@ -223,11 +250,90 @@ def call_master(prompt: dict, tools: list[dict] = MASTER_TOOLS) -> anthropic.typ
         extra_headers={"anthropic-beta": _BETA_HEADER},
     )
     logger.info(
-        "Master API call: %d input tokens, %d output tokens",
+        "Anthropic API call: %d input tokens, %d output tokens",
         response.usage.input_tokens,
         response.usage.output_tokens,
     )
-    return response
+
+    # Normalize to common format
+    raw_content = []
+    for block in response.content:
+        if block.type == "text":
+            raw_content.append({"type": "text", "text": block.text})
+        elif block.type == "tool_use":
+            raw_content.append({"type": "tool_use", "name": block.name, "input": block.input, "id": block.id})
+
+    return {
+        "raw_content": raw_content,
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+        "stop_reason": response.stop_reason,
+    }
+
+
+def _call_cerebras(prompt: dict, tools: list[dict]) -> dict:
+    """Call Cerebras API (OpenAI-compatible). Returns normalized response dict."""
+    from openai import OpenAI
+
+    client = OpenAI(
+        api_key=os.getenv("CEREBRAS_API_KEY"),
+        base_url=_CEREBRAS_BASE_URL,
+    )
+
+    # Build messages: system + user
+    messages = [{"role": "system", "content": prompt["system"]}]
+    messages.extend(prompt["messages"])
+
+    openai_tools = _tools_to_openai(tools)
+
+    response = client.chat.completions.create(
+        model=_MODEL,
+        max_tokens=4096,
+        messages=messages,
+        tools=openai_tools,
+        tool_choice="required",
+    )
+
+    choice = response.choices[0]
+    usage = response.usage
+
+    logger.info(
+        "Cerebras API call: %d input tokens, %d output tokens",
+        usage.prompt_tokens,
+        usage.completion_tokens,
+    )
+
+    # Normalize to common format
+    raw_content = []
+    if choice.message.content:
+        raw_content.append({"type": "text", "text": choice.message.content})
+    if choice.message.tool_calls:
+        for tc in choice.message.tool_calls:
+            args = tc.function.arguments
+            if isinstance(args, str):
+                args = json.loads(args)
+            raw_content.append({
+                "type": "tool_use",
+                "name": tc.function.name,
+                "input": args,
+                "id": tc.id,
+            })
+
+    return {
+        "raw_content": raw_content,
+        "input_tokens": usage.prompt_tokens,
+        "output_tokens": usage.completion_tokens,
+        "stop_reason": choice.finish_reason,
+    }
+
+
+def call_master(prompt: dict, tools: list[dict] = MASTER_TOOLS) -> dict:
+    """Call the master model. Auto-detects provider. Returns normalized response."""
+    provider = _detect_provider()
+    if provider == "anthropic":
+        return _call_anthropic(prompt, tools)
+    else:
+        return _call_cerebras(prompt, tools)
 
 
 # ── Response parsing ──────────────────────────────────────────────
@@ -236,27 +342,27 @@ _KNOWN_TOOLS = {"update_user_state", "send_to_lamp", "send_to_mirror",
                 "send_to_radio", "send_to_rover", "no_op"}
 
 
-def parse_tool_calls(response: anthropic.types.Message) -> list[dict]:
-    """Extract and validate tool_use blocks from the API response.
+def parse_tool_calls(response: dict) -> list[dict]:
+    """Extract and validate tool_use blocks from the normalized response.
 
     Returns list of dicts: {"tool": name, "input": params, "id": tool_use_id}
     Invalid tool calls are logged and skipped.
     """
     calls = []
-    for block in response.content:
-        if block.type != "tool_use":
+    for block in response["raw_content"]:
+        if block.get("type") != "tool_use":
             continue
-        name = block.name
+        name = block["name"]
         if name not in _KNOWN_TOOLS:
             logger.warning("Unknown tool call rejected: %s", name)
             continue
-        if name in _SEND_TOOL_DEVICE_MAP and "instruction" not in block.input:
+        if name in _SEND_TOOL_DEVICE_MAP and "instruction" not in block["input"]:
             logger.warning("Missing 'instruction' parameter for %s, rejected", name)
             continue
         calls.append({
             "tool": name,
-            "input": block.input,
-            "id": block.id,
+            "input": block["input"],
+            "id": block["id"],
         })
     return calls
 
@@ -321,14 +427,6 @@ def execute_master_turn(state_manager: StateManager, event: DeviceEvent) -> dict
     response = call_master(prompt)
     latency_ms = round((time.time() - t0) * 1000)
 
-    # Extract raw content blocks for interpretability
-    raw_content = []
-    for block in response.content:
-        if block.type == "text":
-            raw_content.append({"type": "text", "text": block.text})
-        elif block.type == "tool_use":
-            raw_content.append({"type": "tool_use", "name": block.name, "input": block.input, "id": block.id})
-
     # Parse and validate
     tool_calls = parse_tool_calls(response)
 
@@ -350,11 +448,12 @@ def execute_master_turn(state_manager: StateManager, event: DeviceEvent) -> dict
             "trigger": event.model_dump(mode="json"),
             "state_before": state_before,
             "model": _MODEL,
-            "input_tokens": response.usage.input_tokens,
-            "output_tokens": response.usage.output_tokens,
+            "provider": _detect_provider(),
+            "input_tokens": response["input_tokens"],
+            "output_tokens": response["output_tokens"],
             "latency_ms": latency_ms,
-            "stop_reason": response.stop_reason,
-            "raw_content": raw_content,
+            "stop_reason": response["stop_reason"],
+            "raw_content": response["raw_content"],
             "is_no_op": is_no_op,
         },
     }
