@@ -1,5 +1,5 @@
 # Radio — Stationary audio device
-# Speaker for music and speech. No motors, no camera, no mic.
+# USB speaker output plus a GPIO-driven continuous dial. No camera, no mic.
 
 device_id: radio
 device_name: Radio
@@ -15,11 +15,30 @@ hardware:
     enabled: true
     type: usb                # UPDATE — "usb" or "i2s"
 
-  # No motors, no camera, no mic
+  audio:
+    output_device_hint: ""   # Optional ALSA/device hint
+    media_library_dir: "../media"
+    generated_audio_dir: "../output"
+    default_volume: 55
+
+  dial:
+    enabled: true
+    type: continuous_servo
+    gpio_pin: 18
+    min_pulse_width: 0.001
+    max_pulse_width: 0.002
+    stop_value: 0.0
+    clockwise_value: 0.8
+    counterclockwise_value: -0.8
+    turn_duration_seconds: 0.6
+    settle_seconds: 0.1
+
+  # No camera, no mic
 
 capabilities:
   - speak                    # TTS output
   - play_music               # Music playback
+  - turn_dial                # Physical continuous dial movement
 
 actions:
   speak:
@@ -28,3 +47,6 @@ actions:
   play_music:
     description: "Play music or ambient audio"
     params: {genre: str}
+  turn_dial:
+    description: "Spin the continuous dial briefly"
+    params: {direction: "clockwise|counterclockwise", duration_ms: int}
