@@ -439,3 +439,127 @@ body {
   color: var(--color-text-secondary);
   font-size: 13px;
 }
+
+/* ============================================================
+   10. Room Map (SVG 2D Floor Plan)
+   ============================================================ */
+
+.scene-container {
+  background: radial-gradient(ellipse at center, rgba(15, 15, 30, 0.6) 0%, var(--bg-deep) 70%);
+}
+
+.room-map-svg {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* --- Device status ring animations --- */
+.ring-executing {
+  animation: mapPulseRing 1.5s ease-in-out infinite;
+}
+
+.ring-offline {
+  animation: mapPulseOffline 2s ease-in-out infinite;
+}
+
+@keyframes mapPulseRing {
+  0%, 100% {
+    opacity: 0.3;
+    r: 14;
+  }
+  50% {
+    opacity: 0.8;
+    r: 17;
+  }
+}
+
+@keyframes mapPulseOffline {
+  0%, 100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* --- Speaking indicator bar animation --- */
+.speak-bar-0 {
+  animation: mapSpeakBar 0.6s ease-in-out infinite 0s;
+}
+.speak-bar-1 {
+  animation: mapSpeakBar 0.6s ease-in-out infinite 0.15s;
+}
+.speak-bar-2 {
+  animation: mapSpeakBar 0.6s ease-in-out infinite 0.3s;
+}
+
+@keyframes mapSpeakBar {
+  0%, 100% {
+    height: 3;
+    y: -18;
+  }
+  50% {
+    height: 8;
+    y: -22;
+  }
+}
+
+/* --- Ghost rover animation --- */
+.ghost-rover {
+  animation: mapGhostPulse 2s ease-in-out infinite;
+}
+
+@keyframes mapGhostPulse {
+  0%, 100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* --- Rover path line animation --- */
+.rover-path-line {
+  animation: mapDashScroll 1s linear infinite;
+}
+
+@keyframes mapDashScroll {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+
+/* --- Device group hover --- */
+.device-group:hover .device-label {
+  opacity: 1;
+}
+
+.device-group .device-label {
+  opacity: 0.7;
+  transition: opacity 0.2s ease;
+}
+
+/* --- Waypoint hover reveal --- */
+.waypoint-item text {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.waypoint-item:hover text {
+  opacity: 1;
+}
+.waypoint-item:hover circle {
+  fill: rgba(255,255,255,0.3);
+}
+
+/* --- Furniture hover --- */
+.furniture-item rect {
+  transition: fill 0.3s ease;
+}
+.furniture-item:hover rect {
+  fill: rgba(255,255,255,0.05);
+}
+
+/* --- Tooltip --- */
+.tooltip-group rect {
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+}

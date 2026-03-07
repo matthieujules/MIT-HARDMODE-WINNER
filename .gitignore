@@ -1,5 +1,6 @@
 .env
 data/
+!data/room.json
 __pycache__/
 *.pyc
 devices/radio/output/

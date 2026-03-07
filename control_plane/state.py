@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .schemas import DeviceEvent, DeviceInfo, DeviceRegistration
+from .spatial import deep_merge, init_spatial_state, load_room_config
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,15 @@ class StateManager:
         if not self._event_log_path.exists():
             self._event_log_path.touch()
 
+        # Initialize spatial state from room config if not present
+        state = json.loads(self._state_path.read_text())
+        if "spatial" not in state:
+            room_config = load_room_config(str(self._data_dir / "room.json"))
+            if room_config:
+                state["spatial"] = init_spatial_state(room_config)
+                self._state_path.write_text(json.dumps(state, default=str))
+                logger.info("Initialized spatial state from room config")
+
     # ── State (state.json) ─────────────────────────────────────────
 
     def read_state(self) -> dict:
@@ -45,9 +55,27 @@ class StateManager:
     def write_state(self, patch: dict) -> None:
         with self._lock:
             state = json.loads(self._state_path.read_text())
-            state.update(patch)
+            deep_merge(state, patch)
             self._state_path.write_text(json.dumps(state, default=str))
         logger.info("State updated: %s", list(patch.keys()))
+
+    def read_room_config(self) -> dict:
+        return load_room_config(str(self._data_dir / "room.json"))
+
+    def update_spatial_device(self, device_id: str, patch: dict) -> None:
+        """Update a single device's spatial state with a patch dict."""
+        with self._lock:
+            state = json.loads(self._state_path.read_text())
+            spatial = state.get("spatial", {})
+            devices = spatial.get("devices", {})
+            if device_id in devices:
+                devices[device_id].update(patch)
+            else:
+                devices[device_id] = patch
+            spatial["devices"] = devices
+            state["spatial"] = spatial
+            self._state_path.write_text(json.dumps(state, default=str))
+        logger.info("Spatial device updated: %s <- %s", device_id, list(patch.keys()))
 
     # ── Devices (devices.json) ─────────────────────────────────────
 

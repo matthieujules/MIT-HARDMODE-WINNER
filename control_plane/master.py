@@ -102,13 +102,31 @@ MASTER_TOOLS = [
     },
     {
         "name": "send_to_rover",
-        "description": "Send a natural language instruction to Rover. Rover is a small mobile coaster with motors that pulls a basket. The only mobile device.",
+        "description": "Send a natural language instruction to Rover. Rover is a small mobile coaster with motors that pulls a basket. The only mobile device. Optionally specify a target position on the room map.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "instruction": {
                     "type": "string",
                     "description": "Natural language instruction describing what Rover should do and why.",
+                },
+                "target": {
+                    "type": "object",
+                    "description": "Target position on the room map. Use a waypoint name OR explicit coordinates. Available waypoints: dock, center, desk, lamp_area, door.",
+                    "properties": {
+                        "waypoint": {
+                            "type": "string",
+                            "description": "Named waypoint: dock, center, desk, lamp_area, door",
+                        },
+                        "x_cm": {
+                            "type": "number",
+                            "description": "Explicit x coordinate in cm",
+                        },
+                        "y_cm": {
+                            "type": "number",
+                            "description": "Explicit y coordinate in cm",
+                        },
+                    },
                 },
             },
             "required": ["instruction"],
@@ -209,6 +227,34 @@ def assemble_prompt(state_manager: StateManager, triggering_event: DeviceEvent) 
     state = state_manager.read_state()
     state_text = json.dumps(state, default=str, indent=2)
     sections.append(f"## Current State\n```json\n{state_text[:_LIMITS['state_json']]}\n```")
+
+    # 5b. Spatial map context
+    room_config = state_manager.read_room_config()
+    if room_config:
+        spatial = state.get("spatial", {})
+        spatial_lines = [
+            f"Room: {room_config['width_cm']}x{room_config['height_cm']} cm",
+            "Furniture: " + ", ".join(
+                f"{f['label']} ({f['x_cm']},{f['y_cm']})"
+                for f in room_config.get("furniture", [])
+            ),
+            "Device positions:",
+        ]
+        for dev_id, dev in spatial.get("devices", {}).items():
+            spatial_lines.append(
+                f"  {dev_id}: ({dev.get('x_cm')},{dev.get('y_cm')}) "
+                f"{'fixed' if dev.get('fixed') else 'mobile'} status={dev.get('status','idle')}"
+            )
+        user = spatial.get("user", {})
+        if user:
+            spatial_lines.append(f"User: ({user.get('x_cm')},{user.get('y_cm')}) {user.get('label','')}")
+        spatial_lines.append(
+            "Rover waypoints: " + ", ".join(
+                f"{wp['id']}({wp['x_cm']},{wp['y_cm']})"
+                for wp in room_config.get("waypoints", [])
+            )
+        )
+        sections.append("## Spatial Map\n" + "\n".join(spatial_lines))
 
     # 6. Recent events
     recent_events = state_manager.read_recent_events(max_chars=_LIMITS["events"])
@@ -400,6 +446,15 @@ def extract_device_instructions(tool_calls: list[dict]) -> list[tuple[str, str]]
             instruction = tc["input"]["instruction"]
             instructions.append((device_id, instruction))
     return instructions
+
+
+def extract_rover_targets(tool_calls: list[dict]) -> list[dict]:
+    """Return target dicts from send_to_rover tool calls that include a target."""
+    targets = []
+    for tc in tool_calls:
+        if tc["tool"] == "send_to_rover" and "target" in tc["input"]:
+            targets.append(tc["input"]["target"])
+    return targets
 
 
 # ── Full master turn orchestration ────────────────────────────────

@@ -19,7 +19,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
-from .master import apply_state_update, execute_master_turn, extract_device_instructions
+from .master import apply_state_update, execute_master_turn, extract_device_instructions, extract_rover_targets
+from .spatial import resolve_target, update_device_activity
 from .router import (
     check_voice_lock,
     clear_voice_lock,
@@ -186,6 +187,9 @@ def _handle_action_result(event: DeviceEvent) -> dict:
     # Clear voice lock if this device was speaking
     clear_voice_lock(device_id, state_manager)
 
+    # Reset spatial status to idle
+    state_manager.update_spatial_device(device_id, {"status": "idle"})
+
     logger.info(
         "Action result from %s: %s — %s",
         device_id,
@@ -290,6 +294,16 @@ async def _run_master_reasoning_inner(event: DeviceEvent) -> dict:
     # Step 5-7: Extract and dispatch device instructions
     instructions = extract_device_instructions(tool_calls)
 
+    # Extract rover targets and update spatial state
+    rover_targets = extract_rover_targets(tool_calls)
+    room_config = state_manager.read_room_config()
+    for target in rover_targets:
+        if room_config:
+            x, y = resolve_target(target, room_config)
+            state_manager.update_spatial_device("rover", {
+                "x_cm": x, "y_cm": y, "source": "master_reasoning",
+            })
+
     if not instructions:
         state_manager.append_master_log({
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -311,6 +325,8 @@ async def _run_master_reasoning_inner(event: DeviceEvent) -> dict:
 
     async def _dispatch_device_queue(device_id: str, queue: list[str]) -> list[dict]:
         results = []
+        # Set spatial status to executing
+        state_manager.update_spatial_device(device_id, {"status": "executing"})
         for instruction in queue:
             result = await dispatch_spawn(device_id, instruction)
             # Set voice lock for speaking devices
@@ -423,6 +439,39 @@ async def get_events():
 @app.get("/master-log")
 async def get_master_log(limit: int = 50):
     return state_manager.read_master_log(limit=limit)
+
+
+# ── Spatial endpoints ──────────────────────────────────────────────
+
+
+@app.get("/room")
+async def get_room():
+    """Return static room configuration."""
+    return state_manager.read_room_config()
+
+
+@app.get("/spatial")
+async def get_spatial():
+    """Return current spatial state."""
+    state = state_manager.read_state()
+    return state.get("spatial", {})
+
+
+@app.post("/spatial/calibrate")
+async def calibrate_position(body: dict):
+    """Manual position override (drag-drop from dashboard).
+
+    Body: {"device_id": "rover", "x_cm": 250, "y_cm": 200}
+    """
+    device_id = body.get("device_id")
+    x_cm = body.get("x_cm")
+    y_cm = body.get("y_cm")
+    if not device_id or x_cm is None or y_cm is None:
+        return {"status": "error", "detail": "missing device_id, x_cm, or y_cm"}
+    state_manager.update_spatial_device(device_id, {
+        "x_cm": x_cm, "y_cm": y_cm, "source": "manual_calibration"
+    })
+    return {"status": "ok"}
 
 
 # ── Dashboard ──────────────────────────────────────────────────────

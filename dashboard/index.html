@@ -8,14 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/dashboard/styles.css">
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
-    }
-  }
-  </script>
+  <!-- Three.js import map removed — replaced by 2D SVG room map -->
 </head>
 <body>
   <div id="app">
@@ -39,19 +32,21 @@
     import { initState, updateState } from '/dashboard/state.js';
     import { initDevices, updateDevices } from '/dashboard/devices.js';
     import { initTimeline, updateTimeline } from '/dashboard/timeline.js';
-    import { initScene, updateScene } from '/dashboard/scene.js';
+    import { initMap, updateMap } from '/dashboard/map.js';
 
     // ── Init modules ──────────────────────────────────────────────
     initState(document.getElementById('state-pills'));
     initDevices(document.getElementById('device-grid'));
     initTimeline(document.getElementById('timeline'));
 
+    // initMap is async (fetches /room config)
+
     try {
-      initScene(document.getElementById('scene-mount'));
+      await initMap(document.getElementById('scene-mount'));
     } catch (e) {
-      console.warn('3D scene init failed:', e);
+      console.warn('Map init failed:', e);
       document.getElementById('scene-mount').innerHTML =
-        '<div class="scene-fallback">3D scene unavailable</div>';
+        '<div class="scene-fallback">Room map unavailable</div>';
     }
 
     // ── Deterministic tracking ────────────────────────────────────
@@ -79,9 +74,9 @@
         updateTimeline(eventsData, masterData, pendingDeterministic);
 
         try {
-          updateScene(devicesData, _recentDispatches(masterData));
+          updateMap(stateData, devicesData, _recentDispatches(masterData));
         } catch (e) {
-          // scene updates are non-critical
+          // map updates are non-critical
         }
       } catch (e) {
         console.warn('Poll failed:', e);

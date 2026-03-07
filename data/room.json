@@ -1,0 +1,26 @@
+{
+  "room_id": "hack_room_v1",
+  "units": "cm",
+  "origin": "top_left",
+  "width_cm": 500,
+  "height_cm": 400,
+  "furniture": [
+    {"id": "main_desk", "label": "Main Desk", "x_cm": 300, "y_cm": 40, "w_cm": 150, "h_cm": 70, "type": "desk"},
+    {"id": "chair", "label": "Chair", "x_cm": 340, "y_cm": 120, "w_cm": 50, "h_cm": 50, "type": "chair"},
+    {"id": "side_table", "label": "Side Table", "x_cm": 40, "y_cm": 150, "w_cm": 80, "h_cm": 60, "type": "table"},
+    {"id": "bookshelf", "label": "Shelf", "x_cm": 0, "y_cm": 0, "w_cm": 30, "h_cm": 200, "type": "shelf"}
+  ],
+  "anchors": {
+    "lamp": {"x_cm": 80, "y_cm": 170, "theta_deg": 0, "label": "Lamp"},
+    "mirror": {"x_cm": 375, "y_cm": 40, "theta_deg": 180, "label": "Mirror"},
+    "radio": {"x_cm": 460, "y_cm": 300, "theta_deg": 270, "label": "Radio"}
+  },
+  "waypoints": [
+    {"id": "dock", "x_cm": 60, "y_cm": 350, "label": "Dock"},
+    {"id": "center", "x_cm": 250, "y_cm": 200, "label": "Center"},
+    {"id": "desk", "x_cm": 300, "y_cm": 150, "label": "Near Desk"},
+    {"id": "lamp_area", "x_cm": 120, "y_cm": 200, "label": "Near Lamp"},
+    {"id": "door", "x_cm": 450, "y_cm": 380, "label": "Door"}
+  ],
+  "user_default_position": {"x_cm": 350, "y_cm": 140, "label": "User (Desk)"}
+}
