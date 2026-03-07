@@ -52,6 +52,9 @@ PERSON_DETECT_INTERVAL = 0.25
 SPATIAL_POST_INTERVAL = 0.25
 SPATIAL_MIN_MOVE_CM = 5.0
 ROVER_MIN_CONTOUR_AREA = 150.0
+PERSON_SCORE_THRESHOLD = 0.55
+MAX_TRACKED_PEOPLE = 4
+EMPTY_PEOPLE_POST_MISSES = 3
 CALIBRATION_WINDOW = "ClaudeHome Calibration"
 
 ROVER_COLOR_PRESETS = {
@@ -276,6 +279,33 @@ def send_spatial_observe(
     threading.Thread(target=_post, daemon=True).start()
 
 
+def send_people_observe(people: list[dict], control_plane_url: str) -> None:
+    """POST tracked people positions to the control plane (non-blocking)."""
+
+    def _post():
+        try:
+            payload = {
+                "people": [
+                    {
+                        "x_cm": round(person["x_cm"], 1),
+                        "y_cm": round(person["y_cm"], 1),
+                        "confidence": round(float(person.get("confidence", 0.0)), 3),
+                        "source": person.get("source", "camera_detector"),
+                    }
+                    for person in people
+                ]
+            }
+            httpx.post(
+                f"{control_plane_url}/spatial/observe",
+                json=payload,
+                timeout=2.0,
+            )
+        except Exception as e:
+            logger.debug("People observe failed: %s", e)
+
+    threading.Thread(target=_post, daemon=True).start()
+
+
 def maybe_send_spatial_observe(
     device_id: str,
     x_cm: float,
@@ -352,6 +382,36 @@ def detect_person(frame, model, device) -> tuple[float, float, float] | None:
     y_px = float(y2)
     confidence = float(scores[best_idx])
     return x_px, y_px, confidence
+
+
+def detect_people(frame, model, device) -> list[dict]:
+    """Run person detection and return bottom-center points for all strong boxes."""
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    rgb = np.ascontiguousarray(rgb)
+    image_tensor = torch.from_numpy(rgb).permute(2, 0, 1).float().div(255.0).to(device)
+
+    with torch.inference_mode():
+        output = model([image_tensor])[0]
+
+    labels = output["labels"].detach().cpu().numpy()
+    scores = output["scores"].detach().cpu().numpy()
+    boxes = output["boxes"].detach().cpu().numpy()
+
+    person_indices = np.where((labels == 1) & (scores >= PERSON_SCORE_THRESHOLD))[0]
+    if person_indices.size == 0:
+        return []
+
+    detections = []
+    for idx in person_indices:
+        x1, y1, x2, y2 = boxes[idx]
+        detections.append({
+            "x_px": float((x1 + x2) / 2.0),
+            "y_px": float(y2),
+            "confidence": float(scores[idx]),
+        })
+
+    detections.sort(key=lambda det: det["confidence"], reverse=True)
+    return detections[:MAX_TRACKED_PEOPLE]
 
 
 def detect_rover(frame, color_name: str) -> tuple[float, float, float | None, float] | None:
@@ -528,6 +588,7 @@ def main() -> None:
     last_frame_sent = 0.0
     last_person_detection = 0.0
     last_spatial_updates: dict[str, dict] = {}
+    person_miss_count = 0
 
     try:
         while True:
@@ -561,23 +622,30 @@ def main() -> None:
                 now = time.time()
                 if (now - last_person_detection) >= PERSON_DETECT_INTERVAL:
                     last_person_detection = now
-                    person_detection = detect_person(frame, person_detector, detector_device)
-                    if person_detection is not None:
-                        person_px_x, person_px_y, person_confidence = person_detection
-                        person_x_cm, person_y_cm = pixel_to_room(
-                            person_px_x,
-                            person_px_y,
-                            perspective_transform,
-                        )
-                        maybe_send_spatial_observe(
-                            "user",
-                            person_x_cm,
-                            person_y_cm,
-                            control_plane_url,
-                            last_spatial_updates,
-                            room_config,
-                            confidence=person_confidence,
-                        )
+                    person_detections = detect_people(frame, person_detector, detector_device)
+                    if person_detections:
+                        person_miss_count = 0
+                        tracked_people = []
+                        for detection in person_detections:
+                            person_x_cm, person_y_cm = pixel_to_room(
+                                detection["x_px"],
+                                detection["y_px"],
+                                perspective_transform,
+                            )
+                            w = float(room_config.get("width_cm", 500))
+                            h = float(room_config.get("height_cm", 400))
+                            tracked_people.append({
+                                "x_cm": max(0.0, min(person_x_cm, w)),
+                                "y_cm": max(0.0, min(person_y_cm, h)),
+                                "confidence": detection["confidence"],
+                                "source": "camera_detector",
+                            })
+                        send_people_observe(tracked_people, control_plane_url)
+                    else:
+                        person_miss_count += 1
+                        if person_miss_count >= EMPTY_PEOPLE_POST_MISSES:
+                            send_people_observe([], control_plane_url)
+                            person_miss_count = 0
 
             # ── Slow path: motion-gated frame for Claude Vision ───
             if prev_gray is not None:

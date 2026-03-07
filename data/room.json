@@ -1,26 +1,40 @@
 {
-  "room_id": "hack_room_v1",
+  "room_id": "dinner_scene_v1",
   "units": "cm",
   "origin": "top_left",
   "width_cm": 500,
   "height_cm": 400,
+  "rover_default_waypoint": "fruit_service",
   "furniture": [
-    {"id": "main_desk", "label": "Main Desk", "x_cm": 300, "y_cm": 40, "w_cm": 150, "h_cm": 70, "type": "desk"},
-    {"id": "chair", "label": "Chair", "x_cm": 340, "y_cm": 120, "w_cm": 50, "h_cm": 50, "type": "chair"},
-    {"id": "side_table", "label": "Side Table", "x_cm": 40, "y_cm": 150, "w_cm": 80, "h_cm": 60, "type": "table"},
-    {"id": "bookshelf", "label": "Shelf", "x_cm": 0, "y_cm": 0, "w_cm": 30, "h_cm": 200, "type": "shelf"}
+    {"id": "dining_table", "label": "Dining Table", "x_cm": 150, "y_cm": 100, "w_cm": 200, "h_cm": 120, "type": "table"},
+    {"id": "host_chair", "label": "Sally Seat", "x_cm": 215, "y_cm": 228, "w_cm": 70, "h_cm": 28, "type": "chair"},
+    {"id": "guest_chair", "label": "Guest Seat", "x_cm": 215, "y_cm": 72, "w_cm": 70, "h_cm": 28, "type": "chair"},
+    {"id": "door_zone", "label": "Door", "x_cm": 430, "y_cm": 300, "w_cm": 50, "h_cm": 78, "type": "door"},
+    {"id": "corner_zone", "label": "Corner", "x_cm": 432, "y_cm": 18, "w_cm": 46, "h_cm": 46, "type": "corner"}
   ],
   "anchors": {
-    "lamp": {"x_cm": 80, "y_cm": 170, "theta_deg": 0, "label": "Lamp"},
-    "mirror": {"x_cm": 375, "y_cm": 40, "theta_deg": 180, "label": "Mirror"},
-    "radio": {"x_cm": 420, "y_cm": 82, "theta_deg": 270, "label": "Radio"}
+    "lamp": {"x_cm": 188, "y_cm": 120, "theta_deg": 35, "label": "Lamp"},
+    "mirror": {"x_cm": 252, "y_cm": 104, "theta_deg": 180, "label": "Frame"},
+    "radio": {"x_cm": 314, "y_cm": 122, "theta_deg": 270, "label": "Radio"}
+  },
+  "sensor_mounts": {
+    "global_camera": {"x_cm": 454, "y_cm": 336, "theta_deg": 225, "label": "Door Camera"},
+    "global_mic": {"x_cm": 442, "y_cm": 324, "theta_deg": 225, "label": "Door Mic"}
   },
   "waypoints": [
-    {"id": "dock", "x_cm": 60, "y_cm": 350, "label": "Dock"},
-    {"id": "center", "x_cm": 250, "y_cm": 200, "label": "Center"},
-    {"id": "desk", "x_cm": 300, "y_cm": 150, "label": "Near Desk"},
-    {"id": "lamp_area", "x_cm": 120, "y_cm": 200, "label": "Near Lamp"},
-    {"id": "door", "x_cm": 450, "y_cm": 380, "label": "Door"}
+    {"id": "door", "x_cm": 440, "y_cm": 320, "label": "Door"},
+    {"id": "table_center", "x_cm": 250, "y_cm": 160, "label": "Table Center"},
+    {"id": "host_seat", "x_cm": 250, "y_cm": 250, "label": "Sally Seat"},
+    {"id": "guest_seat", "x_cm": 250, "y_cm": 68, "label": "Tom Seat"},
+    {"id": "fruit_service", "x_cm": 336, "y_cm": 186, "label": "Fruit Bowl"},
+    {"id": "corner", "x_cm": 455, "y_cm": 40, "label": "Corner"}
   ],
-  "user_default_position": {"x_cm": 350, "y_cm": 140, "label": "User (Desk)"}
+  "people_templates": [
+    {"id": "sally", "label": "Sally", "role": "primary", "x_cm": 250, "y_cm": 250},
+    {"id": "tom", "label": "Tom", "role": "guest", "x_cm": 250, "y_cm": 68}
+  ],
+  "people_default_positions": [
+    {"id": "sally", "label": "Sally", "role": "primary", "x_cm": 250, "y_cm": 250}
+  ],
+  "user_default_position": {"x_cm": 250, "y_cm": 250, "label": "Sally"}
 }

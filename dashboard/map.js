@@ -88,6 +88,11 @@ const DEVICE_COLORS = {
   rover: '#22c55e',
 };
 
+const PERSON_COLORS = {
+  primary: '#f472b6',
+  guest: '#e2e8f0',
+};
+
 // Device status from last update
 let _lastSpatial = null;
 let _lastDevicesData = null;
@@ -952,15 +957,16 @@ function _fallbackSpatialForDevice(deviceId) {
   }
 
   if (deviceId === 'rover' && _roomConfig) {
-    const mainDesk = Array.isArray(_roomConfig.furniture)
-      ? _roomConfig.furniture.find((item) => item.id === 'main_desk')
+    const defaultWaypointId = _roomConfig.rover_default_waypoint || 'fruit_service';
+    const roverWaypoint = Array.isArray(_roomConfig.waypoints)
+      ? _roomConfig.waypoints.find((waypoint) => waypoint.id === defaultWaypointId)
       : null;
-    const deskWaypoint = Array.isArray(_roomConfig.waypoints)
-      ? _roomConfig.waypoints.find((waypoint) => waypoint.id === 'desk')
+    const diningTable = Array.isArray(_roomConfig.furniture)
+      ? _roomConfig.furniture.find((item) => item.id === 'dining_table')
       : null;
-    const roverDefault = mainDesk
-      ? { x_cm: mainDesk.x_cm + 25, y_cm: mainDesk.y_cm + mainDesk.h_cm - 24 }
-      : (deskWaypoint ? { x_cm: deskWaypoint.x_cm + 25, y_cm: deskWaypoint.y_cm - 64 } : null);
+    const roverDefault = roverWaypoint
+      ? { x_cm: roverWaypoint.x_cm, y_cm: roverWaypoint.y_cm }
+      : (diningTable ? { x_cm: diningTable.x_cm + diningTable.w_cm - 24, y_cm: diningTable.y_cm + diningTable.h_cm - 28 } : null);
 
     if (roverDefault) {
       return {
@@ -1107,11 +1113,27 @@ export function updateMap(stateData, devicesData, recentDispatches, overlayData 
       }
   }
 
-  // Update user position
-  if (spatial && spatial.user) {
-    _drawUser(spatial.user.x_cm, spatial.user.y_cm);
+  // Update people positions
+  if (spatial && Array.isArray(spatial.people) && spatial.people.length > 0) {
+    _drawPeople(spatial.people);
+  } else if (spatial && spatial.user) {
+    _drawPeople([{
+      id: 'sally',
+      label: spatial.user.label || 'Sally',
+      role: 'primary',
+      x_cm: spatial.user.x_cm,
+      y_cm: spatial.user.y_cm,
+    }]);
+  } else if (_roomConfig && Array.isArray(_roomConfig.people_default_positions) && _roomConfig.people_default_positions.length > 0) {
+    _drawPeople(_roomConfig.people_default_positions);
   } else if (_roomConfig && _roomConfig.user_default_position) {
-    _drawUser(_roomConfig.user_default_position.x_cm, _roomConfig.user_default_position.y_cm);
+    _drawPeople([{
+      id: 'sally',
+      label: _roomConfig.user_default_position.label || 'Sally',
+      role: 'primary',
+      x_cm: _roomConfig.user_default_position.x_cm,
+      y_cm: _roomConfig.user_default_position.y_cm,
+    }]);
   }
 
   // Handle command pulses
@@ -1159,46 +1181,77 @@ function _updateDeviceStatus(deviceId, status, devEl) {
   }
 }
 
-// ── User position ───────────────────────────────────────────────────
+// ── People positions ────────────────────────────────────────────────
 
-let _userGroup = null;
+const _personGroups = {};
 
-function _drawUser(x, y) {
-  if (!_userGroup) {
-    _userGroup = svgEl('g', { class: 'user-marker' });
+function _personColor(person) {
+  return person.role === 'primary' ? PERSON_COLORS.primary : PERSON_COLORS.guest;
+}
 
-    // Person silhouette (head + body)
-    const head = svgEl('circle', {
-      cx: 0, cy: -5, r: 3,
-      fill: 'none',
-      stroke: 'rgba(226,232,240,0.35)',
-      'stroke-width': '1',
-    });
-    _userGroup.appendChild(head);
+function _getOrCreatePersonGroup(person) {
+  if (_personGroups[person.id]) return _personGroups[person.id];
 
-    const body = svgEl('path', {
-      d: 'M -4,0 Q 0,-2 4,0 L 3,7 Q 0,8 -3,7 Z',
-      fill: 'none',
-      stroke: 'rgba(226,232,240,0.25)',
-      'stroke-width': '0.8',
-    });
-    _userGroup.appendChild(body);
+  const color = _personColor(person);
+  const group = svgEl('g', { class: `user-marker user-marker--${person.role || 'guest'}` });
 
-    // Label
-    const label = svgEl('text', {
-      x: 0, y: 16,
-      fill: 'rgba(226,232,240,0.3)',
-      'font-size': '6',
-      'font-family': "'JetBrains Mono', monospace",
-      'text-anchor': 'middle',
-    });
-    label.textContent = 'USER';
-    _userGroup.appendChild(label);
+  const halo = svgEl('circle', {
+    cx: 0, cy: 0, r: 9,
+    fill: color,
+    opacity: person.role === 'primary' ? '0.08' : '0.05',
+  });
+  group.appendChild(halo);
 
-    _gUser.appendChild(_userGroup);
+  const head = svgEl('circle', {
+    cx: 0, cy: -5, r: 3,
+    fill: 'none',
+    stroke: color,
+    'stroke-width': '1',
+    opacity: '0.9',
+  });
+  group.appendChild(head);
+
+  const body = svgEl('path', {
+    d: 'M -4,0 Q 0,-2 4,0 L 3,7 Q 0,8 -3,7 Z',
+    fill: 'none',
+    stroke: color,
+    'stroke-width': '0.9',
+    opacity: '0.72',
+  });
+  group.appendChild(body);
+
+  const label = svgEl('text', {
+    x: 0, y: 16,
+    fill: color,
+    'font-size': '6',
+    'font-family': "'JetBrains Mono', monospace",
+    'text-anchor': 'middle',
+    'font-weight': '600',
+  });
+  group.appendChild(label);
+
+  _gUser.appendChild(group);
+  _personGroups[person.id] = { group, label };
+  return _personGroups[person.id];
+}
+
+function _drawPeople(people) {
+  const activeIds = new Set();
+
+  for (const person of people) {
+    if (typeof person.x_cm !== 'number' || typeof person.y_cm !== 'number') continue;
+
+    const marker = _getOrCreatePersonGroup(person);
+    marker.group.setAttribute('transform', `translate(${person.x_cm}, ${person.y_cm})`);
+    marker.label.textContent = String(person.label || person.id || 'USER').toUpperCase();
+    activeIds.add(person.id);
   }
 
-  _userGroup.setAttribute('transform', `translate(${x}, ${y})`);
+  for (const [personId, marker] of Object.entries(_personGroups)) {
+    if (activeIds.has(personId)) continue;
+    marker.group.remove();
+    delete _personGroups[personId];
+  }
 }
 
 // ── Rover trail ─────────────────────────────────────────────────────

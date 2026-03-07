@@ -247,9 +247,18 @@ def assemble_prompt(state_manager: StateManager, triggering_event: DeviceEvent) 
                 f"  {dev_id}: ({dev.get('x_cm')},{dev.get('y_cm')}) "
                 f"{'fixed' if dev.get('fixed') else 'mobile'} status={dev.get('status','idle')}"
             )
-        user = spatial.get("user", {})
-        if user:
-            spatial_lines.append(f"User: ({user.get('x_cm')},{user.get('y_cm')}) {user.get('label','')}")
+        people = spatial.get("people", [])
+        if people:
+            spatial_lines.append("People:")
+            for person in people:
+                spatial_lines.append(
+                    f"  {person.get('id','person')} ({person.get('role','guest')}): "
+                    f"({person.get('x_cm')},{person.get('y_cm')}) {person.get('label','')}"
+                )
+        else:
+            user = spatial.get("user", {})
+            if user:
+                spatial_lines.append(f"User: ({user.get('x_cm')},{user.get('y_cm')}) {user.get('label','')}")
         spatial_lines.append(
             "Rover waypoints: " + ", ".join(
                 f"{wp['id']}({wp['x_cm']},{wp['y_cm']})"

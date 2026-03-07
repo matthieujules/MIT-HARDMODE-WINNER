@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
 from .master import apply_state_update, execute_master_turn, extract_device_instructions, extract_rover_targets
-from .spatial import resolve_target, update_device_activity
+from .spatial import merge_people_observations, resolve_target, update_device_activity
 from .router import (
     check_voice_lock,
     clear_voice_lock,
@@ -300,25 +300,33 @@ async def _process_frame_background(source_device: str, image_b64: str) -> None:
 
         # Update state with vision results
         state_patch = {}
-        if "people_count" in analysis:
-            state_patch["people_count"] = analysis["people_count"]
         if "activity" in analysis:
             state_patch["activity"] = analysis["activity"]
         if "mood" in analysis and analysis.get("mood_confidence", 0) >= 0.7:
             state_patch["mood"] = analysis["mood"]
-        if state_patch:
-            state_manager.write_state(state_patch)
+        room_config = state_manager.read_room_config()
 
-        # Update user position from vision if available
-        user_pos = analysis.get("user_position")
-        if user_pos and "x_pct" in user_pos and "y_pct" in user_pos:
-            room_config = state_manager.read_room_config()
-            if room_config:
+        people_observations = analysis.get("people")
+        if isinstance(people_observations, list) and room_config:
+            previous_people = previous_state.get("spatial", {}).get("people", [])
+            tracked_people = merge_people_observations(previous_people, people_observations, room_config)
+            state_manager.update_spatial_people(tracked_people)
+            state_patch["people_count"] = len(tracked_people)
+        else:
+            if "people_count" in analysis:
+                state_patch["people_count"] = analysis["people_count"]
+
+            # Backward-compatible single-user update from vision
+            user_pos = analysis.get("user_position")
+            if user_pos and "x_pct" in user_pos and "y_pct" in user_pos and room_config:
                 x_cm = user_pos["x_pct"] / 100.0 * room_config.get("width_cm", 500)
                 y_cm = user_pos["y_pct"] / 100.0 * room_config.get("height_cm", 400)
                 state_manager.update_spatial_device("user", {
                     "x_cm": round(x_cm), "y_cm": round(y_cm), "source": "camera"
                 })
+
+        if state_patch:
+            state_manager.write_state(state_patch)
 
         # Trigger master only on meaningful scene changes (people entering/leaving)
         if should_trigger_master(analysis, previous_state):
@@ -618,8 +626,15 @@ async def calibrate_position(body: dict):
 async def spatial_observe(body: dict):
     """Camera-based spatial position update.
 
-    Body: {"device_id": "rover", "x_cm": N, "y_cm": N, "theta_deg": N, "confidence": 0.9, "source": "camera"}
+    Body:
+      {"device_id": "rover", "x_cm": N, "y_cm": N, "theta_deg": N, "confidence": 0.9, "source": "camera"}
+    or
+      {"people": [{"id": "sally", "label": "Sally", "role": "primary", "x_cm": N, "y_cm": N}]}
     """
+    if isinstance(body.get("people"), list):
+        state_manager.update_spatial_people(body["people"])
+        return {"status": "ok", "people_tracked": len(body["people"])}
+
     device_id = body.get("device_id")
     if not device_id:
         return {"status": "error", "detail": "missing device_id"}
