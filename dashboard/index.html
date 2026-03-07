@@ -51,6 +51,9 @@
 
     // ── Deterministic tracking ────────────────────────────────────
     const pendingDeterministic = [];
+    let lastStateData = null;
+    let lastDevicesData = null;
+    let lastRecentDispatches = [];
 
     // ── Polling loop ──────────────────────────────────────────────
     async function poll() {
@@ -73,13 +76,30 @@
         updateDevices(devicesData);
         updateTimeline(eventsData, masterData, pendingDeterministic);
 
+        lastStateData = stateData;
+        lastDevicesData = devicesData;
+        lastRecentDispatches = _recentDispatches(masterData);
+
         try {
-          updateMap(stateData, devicesData, _recentDispatches(masterData));
+          updateMap(lastStateData, lastDevicesData, lastRecentDispatches);
         } catch (e) {
           // map updates are non-critical
         }
       } catch (e) {
         console.warn('Poll failed:', e);
+      }
+    }
+
+    async function pollSpatial() {
+      if (!lastStateData || !lastDevicesData) return;
+
+      try {
+        const spatialRes = await fetch('/spatial');
+        const spatialData = await spatialRes.json();
+        lastStateData = { ...lastStateData, spatial: spatialData };
+        updateMap(lastStateData, lastDevicesData, lastRecentDispatches);
+      } catch (e) {
+        console.warn('Spatial poll failed:', e);
       }
     }
 
@@ -99,6 +119,7 @@
     // Initial poll + interval
     poll();
     setInterval(poll, 2000);
+    setInterval(pollSpatial, 500);
 
     // ── Test controls ─────────────────────────────────────────────
     const input = document.getElementById('transcript-input');

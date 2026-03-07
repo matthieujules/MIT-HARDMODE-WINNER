@@ -67,12 +67,17 @@ class StateManager:
         with self._lock:
             state = json.loads(self._state_path.read_text())
             spatial = state.get("spatial", {})
-            devices = spatial.get("devices", {})
-            if device_id in devices:
-                devices[device_id].update(patch)
+            if device_id == "user":
+                user = spatial.get("user", {})
+                user.update(patch)
+                spatial["user"] = user
             else:
-                devices[device_id] = patch
-            spatial["devices"] = devices
+                devices = spatial.get("devices", {})
+                if device_id in devices:
+                    devices[device_id].update(patch)
+                else:
+                    devices[device_id] = patch
+                spatial["devices"] = devices
             state["spatial"] = spatial
             self._state_path.write_text(json.dumps(state, default=str))
         logger.info("Spatial device updated: %s <- %s", device_id, list(patch.keys()))
