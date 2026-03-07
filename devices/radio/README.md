@@ -12,8 +12,6 @@ None.
 |--------|-------------|---------|
 | `speak` | Say something via TTS | `speak("Dinner is ready")` |
 | `play_music` | Play music or ambient audio by genre | `play_music("lo-fi")` |
-| `set_volume` | Set speaker volume (0-100) | `set_volume(40)` |
-| `change_genre` | Switch music genre or mood | `change_genre("jazz")` |
 
 ## Notes
 

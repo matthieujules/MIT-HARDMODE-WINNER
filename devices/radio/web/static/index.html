@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Radio Device - Local Test</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <h1>Radio Localhost Test</h1>
+      <div class="panel">
+        <section class="radio">
+          <div class="dial-shell">
+            <div class="dial" id="dial"></div>
+          </div>
+          <p class="meta" id="dialMeta">Turn signal: waiting</p>
+        </section>
+
+        <section class="controls">
+          <label for="command">Command from central control</label>
+          <textarea id="command" placeholder="Example: Play upbeat morning music for breakfast"></textarea>
+          <button id="runBtn">Run Radio Decision</button>
+          <button id="replayBtn" type="button">Replay Last Audio</button>
+          <audio id="audioPlayer" controls preload="auto" style="width:100%; margin-top:10px;"></audio>
+          <div class="meta" id="status">Idle</div>
+          <pre id="result">No output yet.</pre>
+        </section>
+      </div>
+    </main>
+
+    <script src="/static/main.js"></script>
+  </body>
+</html>

@@ -28,9 +28,3 @@ actions:
   play_music:
     description: "Play music or ambient audio"
     params: {genre: str}
-  set_volume:
-    description: "Set speaker volume (0-100)"
-    params: {volume: int}
-  change_genre:
-    description: "Switch to a different music genre or mood"
-    params: {genre: str}
