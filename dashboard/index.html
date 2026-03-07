@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClaudeHome</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/dashboard/styles.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <span class="topbar__brand">CLAUDEHOME</span>
+      <div id="state-pills"></div>
+    </header>
+    <div class="left-panel">
+      <div class="scene-container" id="scene-mount"></div>
+      <div class="device-grid" id="device-grid"></div>
+    </div>
+    <main class="timeline-panel" id="timeline"></main>
+    <footer class="dock">
+      <input class="dock__input" id="transcript-input" type="text" placeholder="Type a voice transcript..." autocomplete="off">
+      <button class="dock__btn dock__btn--tick" id="btn-tick">TICK</button>
+      <button class="dock__btn dock__btn--send" id="btn-send">SEND</button>
+    </footer>
+  </div>
+
+  <script type="module">
+    import { initState, updateState } from '/dashboard/state.js';
+    import { initDevices, updateDevices } from '/dashboard/devices.js';
+    import { initTimeline, updateTimeline } from '/dashboard/timeline.js';
+    import { initScene, updateScene } from '/dashboard/scene.js';
+
+    // ── Init modules ──────────────────────────────────────────────
+    initState(document.getElementById('state-pills'));
+    initDevices(document.getElementById('device-grid'));
+    initTimeline(document.getElementById('timeline'));
+
+    try {
+      initScene(document.getElementById('scene-mount'));
+    } catch (e) {
+      console.warn('3D scene init failed:', e);
+      document.getElementById('scene-mount').innerHTML =
+        '<div class="scene-fallback">3D scene unavailable</div>';
+    }
+
+    // ── Deterministic tracking ────────────────────────────────────
+    const pendingDeterministic = [];
+
+    // ── Polling loop ──────────────────────────────────────────────
+    async function poll() {
+      try {
+        const [stateRes, devicesRes, eventsRes, masterRes] = await Promise.all([
+          fetch('/state'),
+          fetch('/devices'),
+          fetch('/events'),
+          fetch('/master-log'),
+        ]);
+
+        const [stateData, devicesData, eventsData, masterData] = await Promise.all([
+          stateRes.json(),
+          devicesRes.json(),
+          eventsRes.json(),
+          masterRes.json(),
+        ]);
+
+        updateState(stateData);
+        updateDevices(devicesData);
+        updateTimeline(eventsData, masterData, pendingDeterministic);
+
+        try {
+          updateScene(devicesData, _recentDispatches(masterData));
+        } catch (e) {
+          // scene updates are non-critical
+        }
+      } catch (e) {
+        console.warn('Poll failed:', e);
+      }
+    }
+
+    function _recentDispatches(masterLog) {
+      const dispatches = [];
+      const cutoff = Date.now() - 5000;
+      for (const entry of masterLog) {
+        if (new Date(entry.timestamp).getTime() > cutoff && entry.dispatches) {
+          for (const d of entry.dispatches) {
+            dispatches.push({ ...d, timestamp: entry.timestamp });
+          }
+        }
+      }
+      return dispatches;
+    }
+
+    // Initial poll + interval
+    poll();
+    setInterval(poll, 2000);
+
+    // ── Test controls ─────────────────────────────────────────────
+    const input = document.getElementById('transcript-input');
+    const btnSend = document.getElementById('btn-send');
+    const btnTick = document.getElementById('btn-tick');
+
+    async function sendTranscript() {
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+
+      try {
+        const res = await fetch('/events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            device_id: 'global_mic',
+            kind: 'transcript',
+            event_kind: 'transcript',
+            payload: { text },
+          }),
+        });
+        const data = await res.json();
+
+        // Track deterministic responses
+        if (data.detail && data.detail.startsWith('deterministic:')) {
+          const parts = data.detail.replace('deterministic: ', '').split('.');
+          pendingDeterministic.push({
+            text,
+            device: parts[0],
+            action: parts.slice(1).join('.'),
+          });
+        }
+
+        // Re-poll after short delay to pick up results
+        setTimeout(poll, 300);
+      } catch (e) {
+        console.error('Send failed:', e);
+      }
+    }
+
+    async function sendTick() {
+      try {
+        await fetch('/events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            device_id: 'system',
+            kind: 'tick',
+            event_kind: 'tick',
+            payload: {},
+          }),
+        });
+        setTimeout(poll, 300);
+      } catch (e) {
+        console.error('Tick failed:', e);
+      }
+    }
+
+    btnSend.addEventListener('click', sendTranscript);
+    btnTick.addEventListener('click', sendTick);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendTranscript();
+    });
+  </script>
+</body>
+</html>

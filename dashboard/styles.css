@@ -1,0 +1,441 @@
+/* ============================================================
+   ClaudeHome Dashboard — Dark Glassmorphism UI
+   ============================================================ */
+
+/* --- Design Tokens --- */
+:root {
+  --bg-deep: #06060a;
+  --bg-card: rgba(15, 15, 25, 0.8);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --color-cyan: #00f0ff;
+  --color-purple: #8b5cf6;
+  --color-green: #22c55e;
+  --color-amber: #f59e0b;
+  --color-error: #ef4444;
+  --color-text: #e2e8f0;
+  --color-text-secondary: #64748b;
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+/* --- Reset --- */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg-deep);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+/* --- Animations --- */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+/* ============================================================
+   Layout — CSS Grid, full viewport
+   ============================================================ */
+#app {
+  display: grid;
+  grid-template-rows: 48px 1fr 56px;
+  grid-template-columns: 35% 65%;
+  grid-template-areas:
+    "topbar  topbar"
+    "left    timeline"
+    "dock    dock";
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ============================================================
+   1. Topbar
+   ============================================================ */
+.topbar {
+  grid-area: topbar;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 0 16px;
+}
+
+.topbar__brand {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  color: var(--color-cyan);
+  font-size: 13px;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.topbar__pills,
+#state-pills {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+}
+
+/* ============================================================
+   2. State Pills
+   ============================================================ */
+.state-pill {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 4px 10px;
+  border-radius: 12px;
+  transition: all 0.3s ease;
+}
+
+.state-pill--mode {
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid var(--color-purple);
+  color: var(--color-purple);
+}
+
+.state-pill--mood {
+  background: rgba(0, 240, 255, 0.15);
+  border: 1px solid var(--color-cyan);
+  color: var(--color-cyan);
+}
+
+.state-pill--energy {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid var(--color-amber);
+  color: var(--color-amber);
+}
+
+.state-pill--changed {
+  transform: scale(1.05);
+}
+
+.state-pill--changed.state-pill--mode {
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
+}
+
+.state-pill--changed.state-pill--mood {
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.4);
+}
+
+.state-pill--changed.state-pill--energy {
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+}
+
+/* ============================================================
+   3. Left Panel
+   ============================================================ */
+.left-panel {
+  grid-area: left;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.scene-container {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.device-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 12px;
+}
+
+/* ============================================================
+   4. Device Cards
+   ============================================================ */
+.device-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.device-card__icon {
+  font-size: 24px;
+}
+
+.device-card__info {
+  display: flex;
+  flex-direction: column;
+}
+
+.device-card__name {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.device-card__meta {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+
+.status-dot--online {
+  background: var(--color-green);
+  box-shadow: 0 0 6px var(--color-green);
+}
+
+.status-dot--offline {
+  background: var(--color-error);
+  animation: pulse 2s infinite;
+}
+
+/* ============================================================
+   5. Timeline Panel
+   ============================================================ */
+.timeline-panel {
+  grid-area: timeline;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  gap: 8px;
+  padding: 12px 16px;
+  background: transparent;
+}
+
+/* Custom scrollbar */
+.timeline-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.timeline-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.timeline-panel::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+/* ============================================================
+   6. Timeline Cards
+   ============================================================ */
+.timeline-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--border-subtle);
+  animation: slideIn 0.3s ease-out;
+}
+
+.timeline-card--in {
+  border-left-color: var(--color-cyan);
+}
+
+.timeline-card--reasoning {
+  border-left-color: var(--color-purple);
+}
+
+.timeline-card--out {
+  border-left-color: var(--color-green);
+}
+
+.timeline-card--deterministic {
+  border-left-color: var(--color-amber);
+}
+
+.timeline-card__header {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  gap: 8px;
+}
+
+.timeline-card__summary {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+}
+
+.timeline-card__expandable {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+
+.timeline-card__expandable.expanded {
+  max-height: 600px;
+}
+
+.timeline-card__detail {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+}
+
+.chevron {
+  transition: transform 0.3s;
+}
+
+.expanded .chevron {
+  transform: rotate(90deg);
+}
+
+/* ============================================================
+   7. Indicator Badges
+   ============================================================ */
+.indicator {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.indicator--in {
+  background: rgba(0, 240, 255, 0.15);
+  color: var(--color-cyan);
+}
+
+.indicator--reasoning {
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--color-purple);
+}
+
+.indicator--out {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--color-green);
+}
+
+.indicator--deterministic {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--color-amber);
+}
+
+/* ============================================================
+   8. Dock (Bottom Bar)
+   ============================================================ */
+.dock {
+  grid-area: dock;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  background: transparent;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.dock__input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  outline: none;
+}
+
+.dock__input:focus {
+  outline: 1px solid var(--color-cyan);
+}
+
+.dock__btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  font-weight: 600;
+  border: none;
+}
+
+.dock__btn--send {
+  background: var(--color-cyan);
+  color: #000;
+}
+
+.dock__btn--tick {
+  background: transparent;
+  border: 1px solid var(--color-amber);
+  color: var(--color-amber);
+}
+
+/* ============================================================
+   9. Tool Calls & State Diffs
+   ============================================================ */
+.tool-call {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+
+.tool-call__icon {
+  font-size: 16px;
+}
+
+.state-diff {
+  font-size: 11px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+  margin-top: 4px;
+}
+
+/* ============================================================
+   Scene Fallback
+   ============================================================ */
+.scene-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}

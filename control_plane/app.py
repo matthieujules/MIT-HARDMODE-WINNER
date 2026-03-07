@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 load_dotenv()  # Must load before importing master (reads MASTER_MODEL, MASTER_PROVIDER)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
 from .master import apply_state_update, execute_master_turn, extract_device_instructions
@@ -37,6 +40,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ClaudeHome Control Plane")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 state_manager = StateManager()
 
 
@@ -414,3 +423,12 @@ async def get_events():
 @app.get("/master-log")
 async def get_master_log(limit: int = 50):
     return state_manager.read_master_log(limit=limit)
+
+
+# ── Dashboard ──────────────────────────────────────────────────────
+
+@app.get("/")
+async def dashboard_root():
+    return FileResponse("dashboard/index.html")
+
+app.mount("/dashboard", StaticFiles(directory="dashboard"), name="dashboard")
