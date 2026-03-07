@@ -1,0 +1,184 @@
+graph TB
+    %% ─── USER & SENSING ───
+    subgraph SENSING["SENSING LAYER"]
+        direction LR
+        user(("User<br/>(Matt)"))
+        global_mic["Global Mic<br/>16kHz PCM"]
+        global_cam["Global Camera<br/>640×480"]
+    end
+
+    %% ─── VOICE SIDECAR ───
+    subgraph VOICE["VOICE SIDECAR (laptop)"]
+        direction TB
+        vad["Silero VAD v5<br/>speech_prob > 0.5"]
+        stt["Whisper STT<br/>Groq API / local"]
+        estop_check{"Emergency<br/>Stop?"}
+        vlock_check{"Voice<br/>Lock?"}
+    end
+
+    %% ─── VISION SIDECAR ───
+    subgraph VISION["VISION SIDECAR (laptop)"]
+        direction TB
+        subgraph FAST["FAST PATH (every frame)"]
+            person_det["FasterRCNN<br/>Person Detection"]
+            rover_det["HSV Color<br/>Rover Tracking"]
+        end
+        subgraph SLOW["SLOW PATH (motion-gated, 8s cooldown)"]
+            motion_gate["Motion Gate<br/>Frame Diff"]
+            b64_encode["JPEG Encode<br/>Base64"]
+        end
+        calibration["Perspective<br/>Transform<br/>(4-click homography)"]
+    end
+
+    %% ─── CONTROL PLANE ───
+    subgraph LAPTOP["CONTROL PLANE (FastAPI on laptop)"]
+        direction TB
+        api["app.py<br/>HTTP + WebSocket<br/>597 lines"]
+
+        subgraph ROUTING["EVENT ROUTING"]
+            router["Deterministic Router<br/>8 regex patterns"]
+            master_lock["Master Lock<br/>(asyncio.Lock, serial)"]
+        end
+
+        subgraph REASONING["MASTER REASONING"]
+            prompt_asm["Prompt Assembly<br/>SOUL + user.md + state<br/>+ devices + events<br/>(40K char cap)"]
+            master["Master Model<br/>Claude Sonnet 4.6<br/>(1M context beta)<br/>+ Fast Mode option"]
+            tools["6 Tools:<br/>update_user_state<br/>send_to_{lamp,mirror,<br/>radio,rover}<br/>no_op"]
+        end
+
+        subgraph VISION_ANALYSIS["VISION ANALYSIS"]
+            claude_vision["Claude Vision<br/>(Sonnet 4.6)"]
+            trigger_gate{"people_count<br/>changed?"}
+        end
+
+        subgraph STATE["STATE LAYER (file-backed)"]
+            state_json["state.json<br/>mode, mood, energy<br/>people_count, spatial"]
+            devices_json["devices.json<br/>registry + status"]
+            event_log["event_log.jsonl<br/>bounded append-only"]
+            master_log["master_log.jsonl<br/>full turn history"]
+            user_md["user.md<br/>profile + preferences"]
+            soul_md["SOUL.md files<br/>master + 4 devices"]
+            room_json["room.json<br/>500×400cm layout"]
+        end
+    end
+
+    %% ─── DEVICE LAYER ───
+    subgraph DEVICES["DEVICE LAYER (4 Raspberry Pis via Tailscale)"]
+        direction TB
+        subgraph LAMP["Lamp (lamp-pi)"]
+            lamp_agent["Agent Loop<br/>(Qwen via Cerebras)"]
+            lamp_hw["SO101 6DOF Arm<br/>+ RGB LED (PWM)"]
+        end
+        subgraph MIRROR["Mirror (mirror-pi)"]
+            mirror_agent["Agent Loop<br/>(Qwen via Cerebras)"]
+            mirror_hw["LCD 1080×1920<br/>+ Tilt Servo<br/>+ Camera"]
+        end
+        subgraph RADIO["Radio (radio-pi)"]
+            radio_agent["Agent Loop<br/>(Qwen via Cerebras)"]
+            radio_hw["Speaker (USB)<br/>+ Dial Servo"]
+        end
+        subgraph ROVER["Rover (rover-pi)"]
+            rover_reflex["Reflex Layer<br/>stall detect, e-stop"]
+            rover_agent["Agent Loop<br/>(Qwen via Cerebras)"]
+            rover_hw["Diff Drive Motors<br/>+ Quad Encoders"]
+        end
+    end
+
+    %% ─── DASHBOARD ───
+    subgraph DASH["DASHBOARD (browser)"]
+        direction LR
+        svg_map["2D SVG Map<br/>(1188 lines)<br/>drag-to-calibrate"]
+        timeline["Timeline<br/>events + reasoning<br/>+ dispatches"]
+        state_pills["State Pills<br/>mode / mood / energy"]
+        device_grid["Device Grid<br/>online / offline"]
+    end
+
+    %% ─── CONNECTIONS: User → Sensing ───
+    user -->|voice| global_mic
+    user -->|presence| global_cam
+
+    %% ─── CONNECTIONS: Voice Pipeline ───
+    global_mic --> vad
+    vad --> stt
+    stt --> estop_check
+    estop_check -->|"YES: bypass all"| api
+    estop_check -->|"NO"| vlock_check
+    vlock_check -->|"unlocked"| api
+    vlock_check -.->|"locked: drop"| vlock_check
+
+    %% ─── CONNECTIONS: Vision Pipeline ───
+    global_cam --> person_det
+    global_cam --> rover_det
+    global_cam --> motion_gate
+    person_det --> calibration
+    rover_det --> calibration
+    calibration -->|"POST /spatial/observe"| api
+    motion_gate --> b64_encode
+    b64_encode -->|"POST /events (frame)"| api
+
+    %% ─── CONNECTIONS: Control Plane Internal ───
+    api -->|transcript| router
+    router -->|"regex match"| api
+    router -->|"no match"| master_lock
+    master_lock --> prompt_asm
+    prompt_asm --> master
+    master --> tools
+
+    api -->|frame| claude_vision
+    claude_vision --> trigger_gate
+    trigger_gate -->|"YES"| master_lock
+    trigger_gate -.->|"NO: state only"| state_json
+
+    %% State connections
+    state_json --> prompt_asm
+    devices_json --> prompt_asm
+    user_md --> prompt_asm
+    soul_md --> prompt_asm
+    event_log --> prompt_asm
+    room_json --> prompt_asm
+    tools --> state_json
+    tools --> master_log
+    api --> event_log
+    api --> devices_json
+
+    %% ─── CONNECTIONS: Dispatches ───
+    api -->|"command (deterministic)"| lamp_hw
+    api -->|"command (deterministic)"| rover_hw
+
+    api -->|"spawn (NL intent)"| lamp_agent
+    api -->|"spawn (NL intent)"| mirror_agent
+    api -->|"spawn (NL intent)"| radio_agent
+    api -->|"spawn (NL intent)"| rover_agent
+
+    lamp_agent --> lamp_hw
+    mirror_agent --> mirror_hw
+    radio_agent --> radio_hw
+    rover_reflex --> rover_hw
+    rover_agent --> rover_reflex
+
+    %% ─── CONNECTIONS: Dashboard ───
+    api -->|"GET /state, /devices,<br/>/events, /master-log"| DASH
+    svg_map -->|"POST /spatial/calibrate"| api
+
+    %% ─── CONNECTIONS: Device → Control Plane ───
+    lamp_hw -.->|"action_result"| api
+    mirror_hw -.->|"action_result +<br/>clear voice_lock"| api
+    radio_hw -.->|"action_result +<br/>clear voice_lock"| api
+    rover_hw -.->|"action_result"| api
+
+    %% ─── Styling ───
+    classDef sensing fill:#1e3a5f,stroke:#4a9eff,color:#fff
+    classDef voice fill:#2d1b4e,stroke:#8b5cf6,color:#fff
+    classDef vision fill:#1b3d2e,stroke:#22c55e,color:#fff
+    classDef control fill:#3b2510,stroke:#f59e0b,color:#fff
+    classDef device fill:#3b1010,stroke:#ef4444,color:#fff
+    classDef dash fill:#1a1a2e,stroke:#00f0ff,color:#fff
+    classDef state fill:#1a2332,stroke:#64748b,color:#cbd5e1
+
+    class user,global_mic,global_cam sensing
+    class vad,stt,estop_check,vlock_check voice
+    class person_det,rover_det,motion_gate,b64_encode,calibration vision
+    class api,router,master_lock,prompt_asm,master,tools,claude_vision,trigger_gate control
+    class lamp_agent,lamp_hw,mirror_agent,mirror_hw,radio_agent,radio_hw,rover_reflex,rover_agent,rover_hw device
+    class svg_map,timeline,state_pills,device_grid dash
+    class state_json,devices_json,event_log,master_log,user_md,soul_md,room_json state

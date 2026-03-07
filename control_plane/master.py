@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 _MODEL = os.getenv("MASTER_MODEL", "claude-sonnet-4-6")
 _PROVIDER = os.getenv("MASTER_PROVIDER", "auto")  # "anthropic", "cerebras", or "auto"
+_FAST_MODE = os.getenv("MASTER_FAST_MODE", "false").lower() in ("true", "1", "yes")
 _BETA_HEADER = "context-1m-2025-08-07"
+_FAST_BETA = "fast-mode-2026-02-01"
 _CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
 
 
@@ -286,17 +288,38 @@ def _call_anthropic(prompt: dict, tools: list[dict]) -> dict:
     import anthropic
 
     client = anthropic.Anthropic()
-    response = client.messages.create(
-        model=_MODEL,
-        max_tokens=4096,
-        system=prompt["system"],
-        messages=prompt["messages"],
-        tools=tools,
-        tool_choice={"type": "any"},
-        extra_headers={"anthropic-beta": _BETA_HEADER},
-    )
+    used_fast = False
+
+    if _FAST_MODE:
+        try:
+            betas = [_FAST_BETA, _BETA_HEADER]
+            response = client.beta.messages.create(
+                model=_MODEL,
+                max_tokens=4096,
+                system=prompt["system"],
+                messages=prompt["messages"],
+                tools=tools,
+                tool_choice={"type": "any"},
+                speed="fast",
+                betas=betas,
+            )
+            used_fast = True
+        except anthropic.RateLimitError:
+            logger.warning("Fast mode rate-limited, falling back to standard endpoint")
+
+    if not used_fast:
+        response = client.messages.create(
+            model=_MODEL,
+            max_tokens=4096,
+            system=prompt["system"],
+            messages=prompt["messages"],
+            tools=tools,
+            tool_choice={"type": "any"},
+            extra_headers={"anthropic-beta": _BETA_HEADER},
+        )
     logger.info(
-        "Anthropic API call: %d input tokens, %d output tokens",
+        "Anthropic API call (%s): %d input tokens, %d output tokens",
+        "fast" if used_fast else "normal",
         response.usage.input_tokens,
         response.usage.output_tokens,
     )

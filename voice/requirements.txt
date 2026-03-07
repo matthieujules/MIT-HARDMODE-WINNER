@@ -1,0 +1,11 @@
+sounddevice
+numpy
+torch
+httpx
+
+# For Groq Whisper backend (default):
+# pip install groq
+# Also requires GROQ_API_KEY env var
+
+# For local faster-whisper backend:
+# pip install faster-whisper
