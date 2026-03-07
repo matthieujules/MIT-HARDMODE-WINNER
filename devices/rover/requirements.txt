@@ -1,0 +1,7 @@
+# Rover device runtime dependencies
+# Install on the Rover Raspberry Pi.
+
+openai>=1.65.0
+PyYAML>=6.0.2
+gpiozero>=2.0
+websockets>=12.0

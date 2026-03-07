@@ -12,7 +12,7 @@ Use this file together with the Mermaid sources in `docs/architecture/`.
 ClaudeHome is a smart-home demo with four embodied devices:
 
 - Lamp: expressive LEM arm (SO-101 arm + LEMP RGB light, no speech)
-- Mirror: primary conversational companion (own camera, speaker, tilt servo)
+- Mirror: visual smart mirror (own camera, LCD display, tilt servo)
 - Radio: stationary audio device (speaker for music and speech)
 - Rover: small mobile coaster that pulls a basket (motors + encoders)
 
@@ -127,11 +127,12 @@ Until the live Cerebras call is wired up, the runtime may use a deterministic lo
 
 ### Mirror
 
-Mirror is the primary conversational device. Face-to-face with the user.
+Mirror is the primary visual display device. Face-to-face with the user.
 
 - has its OWN camera (for mood, appearance, expression analysis)
-- speaker for TTS
+- LCD screen for generated visuals
 - tilt servo for physical expression
+- no speaker
 - no mic (global mic is separate)
 
 ### Radio
@@ -318,11 +319,11 @@ When the control plane receives a `DeviceEvent`, route by `kind`:
 
 The deterministic router must include a high-priority fuzzy match for stop/halt/freeze commands. If any transcript matches a stop pattern (e.g., `stop|halt|freeze|wait|no no no`), the router immediately broadcasts a `command` type `stop` to Rover (the only mobile device). This is a safety requirement for mobile robots.
 
-**Emergency stop bypasses voice lock.** Even if Mirror or Radio is currently speaking (and voice lock is active), stop-pattern matching must still be evaluated. The processing order for transcript events is: emergency stop check -> voice lock filter -> deterministic router -> master queue.
+**Emergency stop bypasses voice lock.** Even if Radio is currently speaking (and voice lock is active), stop-pattern matching must still be evaluated. The processing order for transcript events is: emergency stop check -> voice lock filter -> deterministic router -> master queue.
 
 ### Voice Lock
 
-The control plane maintains an `is_speaking` flag per device. While a speaking device (Mirror, Radio) is executing a `speak` action, the control plane drops non-emergency `transcript` events. This prevents TTS audio from being picked up by the global microphone and triggering a feedback loop.
+The control plane maintains an `is_speaking` flag per device. While a speaking device (Radio) is executing a `speak` action, the control plane drops non-emergency `transcript` events. This prevents TTS audio from being picked up by the global microphone and triggering a feedback loop.
 
 The flag is set when a `spawn` or `command` involving speech is dispatched and cleared when the corresponding `action_result` arrives (or after a timeout of 10s). Note: `action_result` events are routed to the log AND checked against the voice lock — "log only, no further processing" in the routing table means no master trigger, not that no side effects occur.
 
@@ -547,7 +548,7 @@ The master reads all device `SOUL.md` files to:
 Each device agent reads its own `SOUL.md` to:
 
 - interpret the master's instruction with personality and creative flair
-- decide the specific words to say (for speaking devices: Mirror, Radio)
+- decide the specific words to say (for speaking devices: Radio)
 - choose the style and timing of physical actions
 - add creative flourishes that align with its character
 
@@ -576,7 +577,7 @@ No ORM, no database, no task queue. Stdlib `json` + file I/O for all persistence
 | `gpiozero` | LEDs, GPIO, motor PWM | Pre-installed on Pi OS |
 | `opencv-python` | Camera capture + motion detection | Mirror camera, global camera |
 | `websockets` | WebSocket client to control plane | All devices |
-| `elevenlabs` | TTS | Speaking devices (Mirror, Radio) |
+| `elevenlabs` | TTS | Speaking devices (Radio) |
 | `openai` | OpenAI-compatible client for fast inference APIs | All devices (agent loop model calls) |
 | `pyserial` | USB serial link to device motor boards | Lamp (SO-101), possibly Rover depending on controller |
 | `PyYAML` | Device config loading | All devices using `config.yaml` |
@@ -736,14 +737,14 @@ A strong demo should show:
 1. Global mic hears "I need to lock in."
 2. Master updates state to focus mode and sends natural language instructions to devices.
 3. Lamp's agent interprets "switch to focus lighting, show determination" — picks its own color ramp and servo choreography.
-4. Mirror's agent interprets "encourage the user briefly" — generates and speaks its own line.
+4. Mirror's agent interprets "encourage the user briefly" — generates a concise visual response on the LCD.
 5. Rover's agent interprets "head over to the user with their supplies" — drives to user with appropriate pacing.
 
 Second beat:
 
 1. A camera (global or Mirror's) notices fatigue cues.
 2. Master updates state from focused to tired and sends new instructions.
-3. Mirror's agent decides how to suggest a break in its own voice.
+3. Mirror's agent decides how to suggest a break visually on the LCD.
 4. Lamp's agent decides how to soften lighting with its own timing.
 5. Radio's agent starts playing calming music.
 
@@ -775,7 +776,7 @@ Implement in this order:
 6. Device agent loop (`agent.py`) and pluggable model client (`model_client.py`) — receives spawn instructions, calls fast inference API, executes hardware tools, loops until done
 7. Global mic voice pipeline (`voice/voice.py`) with voice lock
 8. Lamp action path (`devices/lamp/hardware.py` USB serial arm + GPIO PWM light control) — wired into agent loop for spawn instructions, direct execution for commands
-9. Mirror action path (camera + speaker + tilt) — wired into agent loop
+9. Mirror action path (camera + LCD display + tilt) — wired into agent loop
 10. Radio action path (speaker + music playback) — wired into agent loop
 11. Rover action path (motors + encoders) — wired into agent loop, with reflex layer for stall detection
 12. Centralized vision (`vision.py`) with vision_result trigger (global camera + Mirror camera)

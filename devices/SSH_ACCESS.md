@@ -8,37 +8,37 @@ Hostnames and passwords still need to be filled in with the real values.
 ## Lamp
 
 - Device folder: `devices/lamp`
-- Hostname: `TBD`
-- IP address: `192.168.1.101`
-- SSH user: `pi`
-- SSH password: `TBD`
+- Hostname: `lamphost`
+- IP address: `100.82.116.53`
+- SSH user: `lamp`
+- SSH password: `lamp`
 - Sync target on Pi: `~/Desktop/lamp`
 
 ## Mirror
 
 - Device folder: `devices/mirror`
-- Hostname: `TBD`
-- IP address: `192.168.1.102`
-- SSH user: `pi`
-- SSH password: `TBD`
+- Hostname: `mirrorhost`
+- IP address: `100.71.104.73`
+- SSH user: `mirror`
+- SSH password: `mirror`
 - Sync target on Pi: `~/Desktop/mirror`
 
 ## Radio
 
 - Device folder: `devices/radio`
-- Hostname: `TBD`
-- IP address: `192.168.1.103`
-- SSH user: `pi`
-- SSH password: `TBD`
+- Hostname: `radiohost`
+- IP address: `100.119.150.35`
+- SSH user: `radio`
+- SSH password: `radio`
 - Sync target on Pi: `~/Desktop/radio`
 
 ## Rover
 
 - Device folder: `devices/rover`
-- Hostname: `TBD`
-- IP address: `192.168.1.104`
-- SSH user: `pi`
-- SSH password: `TBD`
+- Hostname: `roverhost`
+- IP address: `100.81.100.34`
+- SSH user: `rover`
+- SSH password: `rover`
 - Sync target on Pi: `~/Desktop/rover`
 
 ## Notes
