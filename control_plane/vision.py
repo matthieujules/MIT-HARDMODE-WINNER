@@ -65,18 +65,14 @@ def analyze_frame(image_b64: str) -> dict | None:
 def should_trigger_master(analysis: dict, current_state: dict) -> bool:
     """Decide if this vision analysis warrants triggering master reasoning.
 
-    Triggers if:
-    - people_count changed
-    - mood changed AND confidence >= 0.7
+    Triggers only on meaningful scene changes (people entering/leaving),
+    not noisy signals like mood fluctuations.
     """
     if analysis is None:
         return False
 
-    if analysis.get("people_count") != current_state.get("people_count"):
-        return True
-
-    if (analysis.get("mood") != current_state.get("mood")
-            and analysis.get("mood_confidence", 0) >= 0.7):
+    if ("people_count" in analysis
+            and analysis["people_count"] != current_state.get("people_count")):
         return True
 
     return False

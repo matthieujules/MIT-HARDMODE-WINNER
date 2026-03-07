@@ -224,71 +224,85 @@ async def _handle_manual_override(event: DeviceEvent) -> dict:
 
 async def _handle_frame(event: DeviceEvent) -> dict:
     """Process camera frame: ack immediately, run vision analysis in background."""
+    global _active_vision_task
+
     image_b64 = event.payload.get("image_b64")
     if not image_b64:
         return {"status": "error", "detail": "frame missing image_b64"}
 
+    # Cancel any previous vision task still running
+    if _active_vision_task is not None and not _active_vision_task.done():
+        _active_vision_task.cancel()
+
     # Run vision analysis in background so the sidecar isn't blocked
-    asyncio.create_task(_process_frame_background(event.device_id, image_b64))
+    _active_vision_task = asyncio.create_task(_process_frame_background(event.device_id, image_b64))
     return {"status": "ok", "detail": "frame accepted, processing in background"}
 
 
 async def _process_frame_background(source_device: str, image_b64: str) -> None:
-    """Background task: Claude Vision analysis + conditional master trigger."""
+    """Background task: Claude Vision analysis + conditional master trigger.
+
+    This task can be cancelled by voice events (preemption) or by a newer
+    frame arriving before this one finishes processing.
+    """
     from .vision import analyze_frame, should_trigger_master
 
     try:
         analysis = await asyncio.to_thread(analyze_frame, image_b64)
+        if analysis is None:
+            return
+
+        # Snapshot state BEFORE writing updates so should_trigger_master
+        # compares against the old state, not the already-updated state.
+        previous_state = state_manager.read_state()
+
+        # Update state with vision results
+        state_patch = {}
+        if "people_count" in analysis:
+            state_patch["people_count"] = analysis["people_count"]
+        if "activity" in analysis:
+            state_patch["activity"] = analysis["activity"]
+        if "mood" in analysis and analysis.get("mood_confidence", 0) >= 0.7:
+            state_patch["mood"] = analysis["mood"]
+        if state_patch:
+            state_manager.write_state(state_patch)
+
+        # Update user position from vision if available
+        user_pos = analysis.get("user_position")
+        if user_pos and "x_pct" in user_pos and "y_pct" in user_pos:
+            room_config = state_manager.read_room_config()
+            if room_config:
+                x_cm = user_pos["x_pct"] / 100.0 * room_config.get("width_cm", 500)
+                y_cm = user_pos["y_pct"] / 100.0 * room_config.get("height_cm", 400)
+                state_manager.update_spatial_device("user", {
+                    "x_cm": round(x_cm), "y_cm": round(y_cm), "source": "camera"
+                })
+
+        # Trigger master only on meaningful scene changes (people entering/leaving)
+        if should_trigger_master(analysis, previous_state):
+            vision_event = DeviceEvent(
+                device_id="system",
+                kind="vision_result",
+                payload={
+                    "analysis": analysis,
+                    "source_device": source_device,
+                },
+            )
+            await _run_master_reasoning(vision_event)
+
+    except asyncio.CancelledError:
+        logger.info("Vision processing preempted by higher-priority event")
     except Exception as e:
         logger.error("Vision analysis error: %s", e)
-        return
-    if analysis is None:
-        return
-
-    # BUG FIX: snapshot state BEFORE writing updates so should_trigger_master
-    # compares against the old state, not the already-updated state.
-    previous_state = state_manager.read_state()
-
-    # Update state with vision results (including mood to prevent repeat triggers)
-    state_patch = {}
-    if "people_count" in analysis:
-        state_patch["people_count"] = analysis["people_count"]
-    if "activity" in analysis:
-        state_patch["activity"] = analysis["activity"]
-    if "mood" in analysis and analysis.get("mood_confidence", 0) >= 0.7:
-        state_patch["mood"] = analysis["mood"]
-    if state_patch:
-        state_manager.write_state(state_patch)
-
-    # Update user position from vision if available
-    user_pos = analysis.get("user_position")
-    if user_pos and "x_pct" in user_pos and "y_pct" in user_pos:
-        room_config = state_manager.read_room_config()
-        if room_config:
-            x_cm = user_pos["x_pct"] / 100.0 * room_config.get("width_cm", 500)
-            y_cm = user_pos["y_pct"] / 100.0 * room_config.get("height_cm", 400)
-            state_manager.update_spatial_device("user", {
-                "x_cm": round(x_cm), "y_cm": round(y_cm), "source": "camera"
-            })
-
-    # Check against PREVIOUS state (before we wrote updates)
-    if should_trigger_master(analysis, previous_state):
-        vision_event = DeviceEvent(
-            device_id="system",
-            kind="vision_result",
-            payload={
-                "analysis": analysis,
-                "previous_mood": previous_state.get("mood"),
-                "source_device": source_device,
-            },
-        )
-        await _run_master_reasoning(vision_event)
 
 
 # ── Master reasoning integration ──────────────────────────────────
 
 # Serial master lock — spec requires one reasoning turn at a time
 _master_lock = asyncio.Lock()
+
+# Track active vision background task so voice events can preempt it
+_active_vision_task: asyncio.Task | None = None
 
 # Devices that trigger voice lock when receiving spawn instructions
 _SPEAKING_DEVICES = {"mirror", "radio"}
@@ -305,7 +319,23 @@ async def _run_master_reasoning(event: DeviceEvent) -> dict:
     5. Dispatch spawns to devices
     6. Parallel dispatch to different devices
     7. Sequential dispatch to same device
+
+    Voice events preempt vision-triggered turns: if a vision turn holds
+    the lock and a non-vision event arrives, the vision task is cancelled.
     """
+    global _active_vision_task
+
+    # Non-vision events preempt active vision master turns
+    if event.kind != "vision_result" and _active_vision_task is not None and not _active_vision_task.done():
+        _active_vision_task.cancel()
+        _active_vision_task = None
+        logger.info("Preempted vision master turn for %s event", event.kind)
+        # Yield repeatedly until the cancelled task releases the lock
+        for _ in range(50):  # up to ~500ms
+            if not _master_lock.locked():
+                break
+            await asyncio.sleep(0.01)
+
     async with _master_lock:
         return await _run_master_reasoning_inner(event)
 
