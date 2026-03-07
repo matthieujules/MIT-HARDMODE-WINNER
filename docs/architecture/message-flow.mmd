@@ -1,54 +1,51 @@
 sequenceDiagram
     participant U as User
-    participant M as Mirror runtime
+    participant GM as Global Mic
     participant C as Control plane
     participant X as Master model<br/>(Claude Sonnet 4.6)
-    participant V as Vision-capable device
-    participant L as Luxo runtime
-    participant LA as Luxo agent<br/>(Qwen via Cerebras/Groq)
-    participant H as Chef runtime
-    participant HA as Chef agent<br/>(Qwen via Cerebras/Groq)
+    participant GC as Global Camera
+    participant MC as Mirror Camera
+    participant L as Lamp runtime
+    participant LA as Lamp agent<br/>(Qwen via Cerebras/Groq)
+    participant M as Mirror runtime
     participant MA as Mirror agent<br/>(Qwen via Cerebras/Groq)
+    participant Ra as Radio runtime
+    participant RaA as Radio agent<br/>(Qwen via Cerebras/Groq)
+    participant Rv as Rover runtime
+    participant RvA as Rover agent<br/>(Qwen via Cerebras/Groq)
 
-    Note over U,HA: DETERMINISTIC COMMAND (no model on either side)
-    U->>M: "Luxo blue"
-    M->>M: VAD + Whisper
-    M->>C: DeviceEvent(kind=transcript)
+    Note over U,RvA: DETERMINISTIC COMMAND (no model on either side)
+    U->>GM: "Lamp blue"
+    GM->>GM: VAD + Whisper
+    GM->>C: DeviceEvent(kind=transcript)
     C->>C: deterministic route: match
     C-->>L: command: set_color blue
     L->>L: direct command handler (no model)
     L->>L: execute hardware
     L-->>C: action_result
 
-    Note over U,HA: REASONING PATH (two-tier model)
-    U->>M: "I need to lock in"
-    M->>M: VAD + Whisper
-    M->>C: DeviceEvent(kind=transcript)
+    Note over U,RvA: REASONING PATH (two-tier model)
+    U->>GM: "I need to lock in"
+    GM->>GM: VAD + Whisper
+    GM->>C: DeviceEvent(kind=transcript)
     C->>C: router: no deterministic match
     C->>X: assembled prompt + tools
-    X-->>C: tool_use: update_user_state + spawn_luxo + spawn_chef + spawn_mirror
+    X-->>C: tool_use: update_user_state + send_to_lamp + send_to_mirror + send_to_rover
     C->>C: persist state.json
 
     par Master dispatches NL intents to devices
-        C-->>L: spawn: "Set a deep focus scene - dim blue light, slow calm breathing pattern"
-        C-->>H: spawn: "Bring a glass of water, say 'staying hydrated for the grind'"
+        C-->>L: spawn: "Focus lighting, show determination — perk up"
         C-->>M: spawn: "Say something encouraging about locking in"
+        C-->>Rv: spawn: "Head over to the user with their supplies"
     end
 
     Note over L,LA: Device agent loops (parallel)
     L->>LA: SOUL.md + HW tools + sensors + instruction
-    LA->>LA: plan: set_color(blue, brightness=40), animate(breathe, slow)
+    LA->>LA: plan: set_color(blue, brightness=40)
     LA-->>L: tool calls
     L->>L: execute hardware
     LA->>LA: check: done
     L-->>C: action_result
-
-    H->>HA: SOUL.md + HW tools + sensors + instruction
-    HA->>HA: plan: drive_to(desk), extend_tray, speak(msg)
-    HA-->>H: tool calls
-    H->>H: execute hardware
-    HA->>HA: check: done
-    H-->>C: action_result
 
     M->>MA: SOUL.md + HW tools + sensors + instruction
     MA->>MA: plan: speak(encouragement)
@@ -57,19 +54,27 @@ sequenceDiagram
     MA->>MA: check: done
     M-->>C: action_result
 
-    Note over U,HA: VISION PATH
-    V->>V: motion gate + frame capture
-    V->>C: DeviceEvent(kind=frame, image_b64)
+    Rv->>RvA: SOUL.md + HW tools + sensors + instruction
+    RvA->>RvA: plan: drive_to(desk)
+    RvA-->>Rv: tool calls
+    Rv->>Rv: execute hardware
+    RvA->>RvA: check: done
+    Rv-->>C: action_result
+
+    Note over U,RvA: VISION PATH (global camera or Mirror camera)
+    GC->>GC: motion gate + frame capture
+    GC->>C: DeviceEvent(kind=frame, source: global_camera)
     C->>C: vision.py: Claude Vision analysis
     C->>C: significant mood change detected
     C->>C: enqueue vision_result event
     C->>X: vision_result + state + recent context
-    X-->>C: tool_use: update_user_state + spawn_luxo + spawn_mirror
+    X-->>C: tool_use: update_user_state + send_to_lamp + send_to_mirror + send_to_radio
     C->>C: persist state.json
 
     par Master dispatches NL intents
         C-->>L: spawn: "Shift to warm relaxing light, gentle sway"
         C-->>M: spawn: "Suggest taking a break, sound caring"
+        C-->>Ra: spawn: "Play some calming music"
     end
 
     L->>LA: SOUL.md + HW tools + sensors + instruction
@@ -81,3 +86,8 @@ sequenceDiagram
     MA-->>M: tool calls
     M->>M: execute hardware
     M-->>C: action_result
+
+    Ra->>RaA: SOUL.md + HW tools + sensors + instruction
+    RaA-->>Ra: tool calls
+    Ra->>Ra: execute hardware
+    Ra-->>C: action_result

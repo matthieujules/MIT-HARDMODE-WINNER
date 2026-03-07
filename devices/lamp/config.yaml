@@ -1,0 +1,78 @@
+# Lamp — Expressive lamp with RGB LED and servos
+# No speech, no camera, no mic
+
+device_id: lamp
+device_name: Lamp
+device_type: lamp
+
+network:
+  ip: "192.168.1.101"        # UPDATE with actual Pi IP
+  ssh_user: pi
+  master_url: "http://192.168.1.10:8000"  # UPDATE with master laptop IP
+
+hardware:
+  led:
+    type: rgb_pwm
+    pins:
+      red: 17                # UPDATE with actual GPIO pins
+      green: 27              # UPDATE
+      blue: 22               # UPDATE
+    pwm_frequency: 1000      # Hz
+
+  servos:
+    type: pca9685_i2c
+    i2c_address: 0x40
+    channels:
+      head_pan: 0            # UPDATE — left-right
+      head_tilt: 1           # UPDATE — up-down nod
+      head_roll: 2           # UPDATE — side tilt (curiosity)
+      body_lean: 3           # UPDATE — forward-back lean
+    servo_range:
+      min_pulse: 500         # UPDATE — microseconds
+      max_pulse: 2400
+      min_angle: 0
+      max_angle: 180
+    default_positions:
+      head_pan: 90
+      head_tilt: 90
+      head_roll: 90
+      body_lean: 90
+
+  # No camera, no mic, no speaker
+
+capabilities:
+  - light                    # RGB LED control
+  - move_head                # Servo pan/tilt/roll/lean
+  - emote                    # Express through light + motion combos
+
+actions:
+  set_color:
+    description: "Set LED to an RGB color"
+    params: {r: int, g: int, b: int}
+  set_brightness:
+    description: "Set overall LED brightness (0-100)"
+    params: {brightness: int}
+  set_scene:
+    description: "Apply a named lighting scene"
+    params: {scene: "focus|relax|energy|dim|alert|off"}
+  look_at:
+    description: "Turn head to look in a direction"
+    params: {pan: int, tilt: int}
+  nod:
+    description: "Nod head up and down (yes)"
+    params: {speed: "slow|normal|fast"}
+  shake:
+    description: "Shake head side to side (no)"
+    params: {speed: "slow|normal|fast"}
+  emote:
+    description: "Express an emotion through combined light + motion"
+    params: {emotion: str}
+  perk_up:
+    description: "Quick upward motion — attention/surprise"
+    params: {}
+  droop:
+    description: "Slow downward lean — sad/sleepy"
+    params: {}
+  reset_position:
+    description: "Return to default neutral position"
+    params: {}

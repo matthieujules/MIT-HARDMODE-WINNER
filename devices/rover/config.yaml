@@ -1,0 +1,52 @@
+# Rover — Small mobile coaster that pulls a basket
+# Motors + encoders. No camera, no mic. Buzzer TBD.
+
+device_id: rover
+device_name: Rover
+device_type: mobile_coaster
+
+network:
+  ip: "192.168.1.104"        # UPDATE with actual Pi IP
+  ssh_user: pi
+  master_url: "http://192.168.1.10:8000"  # UPDATE with master laptop IP
+
+hardware:
+  motors:
+    type: pwm_motor_board    # UPDATE — mecanum or differential drive TBD
+    channels:
+      left:
+        pwm_pin: 12          # UPDATE with actual pin assignments
+        dir_pin_a: 5         # UPDATE
+        dir_pin_b: 6         # UPDATE
+      right:
+        pwm_pin: 13          # UPDATE
+        dir_pin_a: 16        # UPDATE
+        dir_pin_b: 20        # UPDATE
+    pwm_frequency: 1000
+
+  encoders:
+    type: quadrature_gpio    # UPDATE — encoder type TBD
+    channels:
+      left: {a: 4, b: 14}   # UPDATE
+      right: {a: 15, b: 17}  # UPDATE
+    ticks_per_revolution: 360  # UPDATE with actual encoder spec
+
+  buzzer:
+    enabled: false           # TBD — may add a small buzzer
+    pin: null                # UPDATE if buzzer is added
+
+  # No camera, no mic, no speaker
+
+capabilities:
+  - drive                    # Mobile base
+
+actions:
+  drive_to:
+    description: "Drive toward a target location or direction"
+    params: {direction: str, speed: int, duration_ms: int}
+  stop:
+    description: "Stop all motors immediately"
+    params: {}
+  return_home:
+    description: "Drive back to home/starting position"
+    params: {}

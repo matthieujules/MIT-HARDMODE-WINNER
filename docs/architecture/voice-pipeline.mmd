@@ -1,13 +1,13 @@
 graph LR
-    subgraph DEVICE["MIRROR VOICE PATH"]
-        mic["Microphone"]
-        vad["VAD"]
+    subgraph VOICE["GLOBAL MIC VOICE PATH"]
+        mic["Global Microphone<br/>(room-level, not device-attached)"]
+        vad["VAD<br/>(Silero)"]
         stt["Whisper transcription"]
-        transcript["Transcript event"]
+        transcript["Transcript event<br/>device_id: global_mic"]
     end
 
     subgraph CONTROL["LAPTOP CONTROL PLANE"]
-        api["WebSocket receiver"]
+        api["WebSocket receiver<br/>(or direct call if mic on laptop)"]
         route["Deterministic router"]
         master["Master model<br/>Claude Sonnet 4.6"]
     end

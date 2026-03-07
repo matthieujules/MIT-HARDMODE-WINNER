@@ -11,10 +11,16 @@ Use this file together with the Mermaid sources in `docs/architecture/`.
 
 ClaudeHome is a smart-home demo with four embodied devices:
 
-- Luxo: expressive lamp
-- Mirror: primary conversational companion
-- Chef: mobile food tray robot
-- Purse: mobile companion
+- Lamp: expressive lamp (RGB LED + servos, no speech)
+- Mirror: primary conversational companion (own camera, speaker, tilt servo)
+- Radio: stationary audio device (speaker for music and speech)
+- Rover: small mobile coaster that pulls a basket (motors + encoders)
+
+Sensing is handled by two global sources plus one device-specific camera:
+
+- Global mic: room-level microphone, not attached to any device
+- Global camera: room-level camera, not attached to any device
+- Mirror camera: Mirror's own camera for face-to-face interaction
 
 The goal is not "LLM on every box." The goal is a home that feels coherent, proactive, and alive:
 
@@ -41,19 +47,20 @@ The laptop runs one FastAPI-based service responsible for:
 - event log
 - routing deterministic commands
 - calling the master model for open-ended reasoning
-- centralized Claude Vision analysis
+- centralized Claude Vision analysis (frames from global camera and Mirror camera)
+- receiving transcripts from the global mic (VAD + Whisper runs wherever the global mic is attached)
 
 The control plane is the only place that performs cross-device reasoning. The master model decides WHAT should happen and sends natural language instructions to devices. It never specifies hardware-level details.
 
 ### Devices (Raspberry Pis)
 
-Each Pi runs an intelligent device runtime with three layers:
+Each Pi runs an intelligent device runtime with up to three layers (not all devices need all layers):
 
-- **Hardware abstraction layer** — servo, LED, motor, camera, mic, speaker drivers
-- **Reflex/safety layer** — instant hardware-level interrupt handlers (emergency stop, stall detection, collision avoidance)
+- **Hardware abstraction layer** — servo, LED, motor, speaker drivers
+- **Reflex/safety layer** — instant hardware-level interrupt handlers (emergency stop, stall detection for Rover)
 - **Agent loop** — powered by a fast inference model (Qwen via Cerebras/Groq/Together), interprets the master's natural language instructions and sequences hardware actions autonomously
 
-Each device has its own `SOUL.md` personality that it actively interprets. The device agent decides HOW to accomplish the master's intent, including creative expression, hardware sequencing, timing, and spoken line generation.
+Each device has its own `SOUL.md` personality that it actively interprets. The device agent decides HOW to accomplish the master's intent, including creative expression, hardware sequencing, timing, and spoken line generation (for speaking devices).
 
 V1 devices are intelligent execution agents with personality. They never coordinate with each other — cross-device reasoning stays centralized on the laptop. But each device owns its own execution.
 
@@ -75,7 +82,7 @@ This architecture is intentionally simpler than the earlier planning drafts.
 
 - device-side Claude Vision calls
 - a separate conceptual `bus/` and `master/` split
-- all four devices doing equal always-on sensing
+- device-specific mics (global mic handles all voice input)
 
 The key distinction in the two-tier model: the master is the **strategist**, device agents are **tacticians**. We run models on devices via fast cloud APIs (Cerebras/Groq), not local inference. Cross-device reasoning stays centralized. Per-device execution is autonomous.
 
@@ -89,71 +96,62 @@ This reduces:
 
 ## 4. Device Roles In V1
 
+### Lamp
+
+Lamp is the primary ambient actuator. Expressive through light and motion only.
+
+- RGB LED + servos (pan, tilt, roll, lean)
+- no speech, no camera, no mic
+- communicates through color, brightness, and physical gestures
+- receives context about the room from the master (via global camera analysis)
+
 ### Mirror
 
-Mirror is the primary voice interface.
+Mirror is the primary conversational device. Face-to-face with the user.
 
-- main microphone
-- main speaker
-- optional camera
-- warm, encouraging personality
+- has its OWN camera (for mood, appearance, expression analysis)
+- speaker for TTS
+- tilt servo for physical expression
+- no mic (global mic is separate)
 
-### Luxo
+### Radio
 
-Luxo is the primary ambient actuator and secondary perception node.
+Radio is a stationary audio device.
 
-- RGB + servo expression
-- optional camera for presence / mood cues
-- no speech
+- speaker for music playback and speech
+- no motors, no camera, no mic
+- plays ambient music, announcements, spoken responses
 
-### Chef
+### Rover
 
-Chef is an actuator-first device in V1.
+Rover is a small mobile coaster that pulls a basket. Actuator-first.
 
-- mobile base
-- tray presentation
-- optional speech
-- does not need always-on sensing in V1
-
-### Purse
-
-Purse is also actuator-first in V1.
-
-- mobile base
-- speech / commentary
-- no always-on perception required for V1
+- motors + encoders for driving
+- no camera, no mic, no speaker
+- maybe a small buzzer (TBD)
+- the only mobile device in V1
 
 ---
 
 ## 5. Sensing Strategy
 
-V1 uses **selective sensing**, not "everything everywhere."
+V1 uses **global sensing**, not per-device sensing.
 
 ### Voice
 
-Voice enters through Mirror first.
+Voice enters through a **global microphone** — a room-level mic not attached to any device. Transcripts are sent to the control plane. VAD + Whisper runs on whatever device/machine the global mic is attached to (could be the laptop itself, or a dedicated Pi). The location is TBD and does not affect the architecture — what matters is that transcript events reach the control plane.
 
-Optional stretch goal:
-
-- Luxo can also transcribe locally and forward transcripts
+No device has its own microphone.
 
 ### Vision
 
-Vision is gated locally but interpreted centrally.
+Two camera sources, both interpreted centrally:
 
-On-device:
+**Global camera** — a room-level camera not attached to any device. Captures the room, user activity, presence. Frames go to the control plane for Claude Vision analysis. Lamp and Rover get context from this via the master's instructions.
 
-- motion detection
-- cooldown logic
-- frame capture
+**Mirror camera** — Mirror's own camera, face-to-face with the user. Captures mood, appearance, expressions. Frames go to the control plane for Claude Vision analysis.
 
-On laptop:
-
-- Claude Vision analysis
-- user-state updates
-- optional proactive action
-
-This keeps the Pis cheap and simple while making perception consistent.
+Both camera feeds use the same vision pipeline on the control plane: motion-gated frame capture, base64 JPEG transport, Claude Vision analysis, conditional master trigger.
 
 ---
 
@@ -161,15 +159,17 @@ This keeps the Pis cheap and simple while making perception consistent.
 
 The hot path should be deterministic whenever possible.
 
-### Device-Side
+### Global Mic Path
 
-Mirror runs a continuous voice capture loop:
+The global mic runs a continuous voice capture loop (on whatever machine it is attached to):
 
 1. **Audio capture**: 16kHz, mono, int16 via PyAudio. Processed in 512-sample chunks (~32ms each).
 2. **VAD**: Silero VAD evaluates each chunk. Returns speech start/end timestamps.
 3. **Buffering**: Between speech start and speech end, raw PCM chunks are accumulated (~16KB/sec).
-4. **Transcription**: On speech end, the buffer is sent to faster-whisper (base model, int8 quantization). On Pi 5 this takes ~1-2s for a short utterance.
-5. **Packaging**: Non-empty transcripts are wrapped in a `DeviceEvent(kind=transcript)` and sent over WebSocket.
+4. **Transcription**: On speech end, the buffer is sent to faster-whisper (base model, int8 quantization).
+5. **Packaging**: Non-empty transcripts are wrapped in a `DeviceEvent(kind=transcript, device_id="global_mic")` and sent to the control plane.
+
+If the global mic runs on the laptop itself, step 5 is a direct function call instead of a WebSocket send. If it runs on a separate Pi, it connects to the control plane via WebSocket like any device.
 
 ### Control Plane Routing
 
@@ -180,9 +180,9 @@ The control plane receives a transcript and routes it as:
 
 Deterministic examples:
 
-- "Luxo blue"
+- "Lamp blue"
 - "Mirror tilt up"
-- "Chef stop"
+- "Rover stop"
 
 These should bypass the master model and become immediate device commands (sent as `command` type, not `spawn`).
 
@@ -208,7 +208,16 @@ Opus is not part of the core V1 design. It can be tested later if quality demand
 
 V1 vision flow:
 
-### Device-Side (Camera Loop)
+### Camera Sources
+
+Two camera sources feed the same pipeline:
+
+1. **Global camera** — room-level, captures general activity and presence. `device_id: "global_camera"`.
+2. **Mirror camera** — Mirror's own camera, face-to-face with user. `device_id: "mirror"`.
+
+Both follow the same capture and transport pattern:
+
+### Frame Capture
 
 1. `cv2.VideoCapture` opens the camera (USB: `/dev/video0`, or CSI via `picamera2` if preferred). Frames captured continuously (~30fps internal, not streamed).
 2. OpenCV frame differencing: grayscale -> blur -> `cv2.absdiff` -> threshold -> contour detection.
@@ -236,6 +245,8 @@ Return JSON only:
    - Always update `state.json` with `people_count` and `activity` regardless.
 
 7. Master reasoning turn processes the `vision_result` and may issue `spawn` instructions to devices (e.g., soften lighting, suggest break).
+
+The `vision_result` event includes a `source_device` field indicating whether the frame came from `"global_camera"` or `"mirror"`, so the master can contextualize the observation.
 
 ---
 
@@ -278,25 +289,23 @@ When the control plane receives a `DeviceEvent`, route by `kind`:
 | `action_result` | `state.py` (log + side effects) | Append to event log. Update device status in `devices.json`. Clear voice lock `is_speaking` flag if this result corresponds to a `speak` action. No master trigger. |
 | `heartbeat` | `state.py` (device liveness) | Update device `last_seen` timestamp in `devices.json`. No further processing. |
 | `manual_override` | direct dispatch | Operator-injected command via `POST /events`. Uses `device_id: "operator"`. Validate and dispatch immediately, bypassing router and master. |
-| `tick` | master queue | Internal/synthetic. Generated by a periodic timer (every 2-5 min). Uses `device_id: "system"`. Allows the master to evaluate state and initiate proactive behavior (e.g., Chef offering water after long focus). |
-
-`motion` is not a device event kind. Motion detection is device-internal preprocessing that triggers frame capture. Only `frame` events reach the control plane.
+| `tick` | master queue | Internal/synthetic. Generated by a periodic timer (every 2-5 min). Uses `device_id: "system"`. Allows the master to evaluate state and initiate proactive behavior (e.g., Rover bringing items after long focus). |
 
 ### Emergency Stop
 
-The deterministic router must include a high-priority fuzzy match for stop/halt/freeze commands. If any transcript matches a stop pattern (e.g., `stop|halt|freeze|wait|no no no`), the router immediately broadcasts a `command` type `stop` to ALL mobile devices (Chef, Purse) without waiting for master reasoning. This is a safety requirement for mobile robots.
+The deterministic router must include a high-priority fuzzy match for stop/halt/freeze commands. If any transcript matches a stop pattern (e.g., `stop|halt|freeze|wait|no no no`), the router immediately broadcasts a `command` type `stop` to Rover (the only mobile device). This is a safety requirement for mobile robots.
 
-**Emergency stop bypasses voice lock.** Even if Mirror is currently speaking (and voice lock is active), stop-pattern matching must still be evaluated. The processing order for transcript events is: emergency stop check -> voice lock filter -> deterministic router -> master queue.
+**Emergency stop bypasses voice lock.** Even if Mirror or Radio is currently speaking (and voice lock is active), stop-pattern matching must still be evaluated. The processing order for transcript events is: emergency stop check -> voice lock filter -> deterministic router -> master queue.
 
 ### Voice Lock
 
-The control plane maintains an `is_speaking` flag per device. While a speaking device (Mirror, Chef, Purse) is executing a `speak` action, the control plane drops non-emergency `transcript` events from that device. This prevents TTS audio from being picked up by the device's own microphone and triggering a feedback loop.
+The control plane maintains an `is_speaking` flag per device. While a speaking device (Mirror, Radio) is executing a `speak` action, the control plane drops non-emergency `transcript` events. This prevents TTS audio from being picked up by the global microphone and triggering a feedback loop.
 
 The flag is set when a `spawn` or `command` involving speech is dispatched and cleared when the corresponding `action_result` arrives (or after a timeout of 10s). Note: `action_result` events are routed to the log AND checked against the voice lock — "log only, no further processing" in the routing table means no master trigger, not that no side effects occur.
 
 ### State Broadcasts
 
-V1 does not broadcast state to devices. The master factors in all state when generating instructions for device agents. If a device needs to reflect system state (e.g., Luxo showing focus-mode lighting), the master sends a `spawn` instruction describing the intent. The device agent interprets it. This eliminates bidirectional state synchronization complexity.
+V1 does not broadcast state to devices. The master factors in all state when generating instructions for device agents. If a device needs to reflect system state (e.g., Lamp showing focus-mode lighting), the master sends a `spawn` instruction describing the intent. The device agent interprets it. This eliminates bidirectional state synchronization complexity.
 
 ---
 
@@ -310,7 +319,7 @@ All device events use the same envelope. The `payload` shape varies by `kind`.
 
 ```json
 {
-  "device_id": "mirror",
+  "device_id": "lamp",
   "kind": "transcript",
   "ts": "2026-03-06T12:00:00Z",
   "payload": { ... }
@@ -319,12 +328,12 @@ All device events use the same envelope. The `payload` shape varies by `kind`.
 
 ### Per-Kind Payload Schemas
 
-**`transcript`** — voice transcription from Mirror (or any future voice device).
+**`transcript`** — voice transcription from the global mic.
 ```json
 { "text": "I need to lock in" }
 ```
 
-**`frame`** — camera frame captured after local motion detection + cooldown. Base64-encoded JPEG in JSON.
+**`frame`** — camera frame captured after local motion detection + cooldown. Base64-encoded JPEG in JSON. Can come from the global camera or Mirror's camera.
 ```json
 {
   "image_b64": "<base64 JPEG>",
@@ -344,7 +353,7 @@ All device events use the same envelope. The `payload` shape varies by `kind`.
     "notable": null
   },
   "previous_mood": "determined",
-  "source_device": "luxo"
+  "source_device": "global_camera"
 }
 ```
 
@@ -366,7 +375,7 @@ All device events use the same envelope. The `payload` shape varies by `kind`.
 **`manual_override`** — operator-injected event via `POST /events`. Can be either a direct command or a spawn instruction.
 ```json
 {
-  "target": "luxo",
+  "target": "lamp",
   "type": "spawn",
   "instruction": "Switch to relax mode. Ease into it — slow fade, gentle droop."
 }
@@ -398,7 +407,7 @@ Used for emergency stop broadcasts, simple deterministic router commands (`stop`
 ```json
 {
   "type": "spawn",
-  "instruction": "Drive over to the user and offer comfort food. They're stressed — be gentle about it.",
+  "instruction": "Drive over to the user and deliver the basket. They've been working hard — approach gently.",
   "request_id": "req_456",
   "max_iterations": 10,
   "time_budget_ms": 15000
@@ -436,10 +445,10 @@ Devices call `POST /register` once at boot, before connecting their WebSocket.
 Request:
 ```json
 {
-  "device_id": "luxo",
-  "device_name": "Luxo",
+  "device_id": "lamp",
+  "device_name": "Lamp",
   "device_type": "lamp",
-  "capabilities": ["see", "light", "move_head", "emote"],
+  "capabilities": ["light", "move_head", "emote"],
   "actions": ["set_color", "set_brightness", "set_scene", "look_at", "nod", "shake", "emote", "perk_up", "droop", "reset_position"],
   "ip": "192.168.1.101"
 }
@@ -515,11 +524,11 @@ The master reads all device `SOUL.md` files to:
 Each device agent reads its own `SOUL.md` to:
 
 - interpret the master's instruction with personality and creative flair
-- decide the specific words to say (for speaking devices)
+- decide the specific words to say (for speaking devices: Mirror, Radio)
 - choose the style and timing of physical actions
 - add creative flourishes that align with its character
 
-This means personality is genuinely owned by the device, not ventriloquized by the master. The master says "encourage the user, they're locking in" and Mirror decides to say "Let's go. You've got this." in its own warm, encouraging voice. The master says "switch to focus lighting, show some determination" and Luxo decides the exact color ramp, servo sequence, and perk-up timing.
+This means personality is genuinely owned by the device, not ventriloquized by the master. The master says "encourage the user, they're locking in" and Mirror decides to say "Let's go. You've got this." in its own warm, encouraging voice. The master says "switch to focus lighting, show some determination" and Lamp decides the exact color ramp, servo sequence, and perk-up timing.
 
 ---
 
@@ -539,21 +548,26 @@ No ORM, no database, no task queue. Stdlib `json` + file I/O for all persistence
 
 | Package | Purpose | Notes |
 |---|---|---|
-| `adafruit-circuitpython-servokit` | PCA9685 servo control | Luxo, Mirror |
+| `adafruit-circuitpython-servokit` | PCA9685 servo control | Lamp, Mirror |
 | `pytweening` | Servo easing / smooth animation | Pure Python, zero deps |
 | `gpiozero` | LEDs, GPIO, motor PWM | Pre-installed on Pi OS |
-| `opencv-python` | Camera capture + motion detection | USB cameras via `cv2.VideoCapture` |
-| `faster-whisper` | Whisper STT | Mirror only (or laptop if Pi too slow) |
-| `silero-vad` (via `torch`) | Voice activity detection | Mirror only |
+| `opencv-python` | Camera capture + motion detection | Mirror camera, global camera |
 | `websockets` | WebSocket client to control plane | All devices |
-| `elevenlabs` | TTS | Speaking devices (Mirror, Chef, Purse) |
+| `elevenlabs` | TTS | Speaking devices (Mirror, Radio) |
 | `openai` | OpenAI-compatible client for fast inference APIs | All devices (agent loop model calls) |
+
+Motor control for Rover:
+| `gpiozero` or motor HAT lib | Motor + encoder control | Rover — exact lib depends on motor board |
+
+Voice pipeline (runs on global mic host, not a device):
+| `faster-whisper` | Whisper STT | Global mic host (laptop or dedicated Pi) |
+| `silero-vad` (via `torch`) | Voice activity detection | Global mic host |
 
 The `openai` package is used as a client for Cerebras, Groq, and Together AI — they all expose OpenAI-compatible APIs. The model provider is pluggable. Currently targeting Qwen 3 models on Cerebras/Groq/Together AI for fast device agent inference.
 
 Optional fallbacks:
 - `piper-tts` — local TTS if ElevenLabs latency or API limits are a problem
-- `vosk` — lower-accuracy STT if Whisper is too slow on the Pi hardware
+- `vosk` — lower-accuracy STT if Whisper is too slow
 
 ### Not Using
 
@@ -619,26 +633,28 @@ claude-home/
   sync.sh               # rsync device code to Pis
 
   devices/
-    luxo/
+    lamp/
       SOUL.md
       config.yaml
     mirror/
       SOUL.md
       config.yaml
-    chef/
+    radio/
       SOUL.md
       config.yaml
-    purse/
+    rover/
       SOUL.md
       config.yaml
 
   device_runtime/
     main.py              # device entry point, loads config, connects to control plane
-    hardware.py           # HAL: servos (ServoKit), LEDs (gpiozero), motors, camera
-    voice.py              # VAD + Whisper + transcript packaging (Mirror only)
+    hardware.py           # HAL: servos (ServoKit), LEDs (gpiozero), motors, speaker
     ws_client.py          # WebSocket client: connect, send events, receive commands/spawns
     agent.py              # device agent loop: receives spawn instruction, calls fast model API, executes hardware tools, loops until done
     model_client.py       # pluggable model client interface (Cerebras, Groq, Together — all OpenAI-compatible)
+
+  voice/
+    voice.py              # VAD + Whisper + transcript packaging (runs on global mic host)
 
   control_plane/
     app.py               # FastAPI app + WebSocket ConnectionManager
@@ -659,7 +675,7 @@ claude-home/
     architecture/
 ```
 
-`device_runtime/` is synced to each Pi. `control_plane/` runs only on the laptop.
+`device_runtime/` is synced to each Pi. `control_plane/` runs only on the laptop. `voice/` runs on whatever machine hosts the global mic.
 
 ---
 
@@ -667,14 +683,12 @@ claude-home/
 
 | Path | Flow | Target | Breakdown |
 |---|---|---|---|
-| Deterministic command | Mic -> Whisper -> router -> direct command | 2-3s | VAD ~0.1s + Whisper ~1-2s (Pi 5) + network ~0.05s + router ~0.01s |
-| Master reasoning | Mic -> Whisper -> master -> spawn instructions to devices | 3-5s | Whisper ~1-2s + master reasoning ~1.5-3s |
+| Deterministic command | Global mic -> Whisper -> router -> direct command | 2-3s | VAD ~0.1s + Whisper ~1-2s + network ~0.05s + router ~0.01s |
+| Master reasoning | Global mic -> Whisper -> master -> spawn instructions to devices | 3-5s | Whisper ~1-2s + master reasoning ~1.5-3s |
 | Spawn execution | Master intent -> device agent loop -> hardware | +0.5-2s on top of master | Agent loop: 2-5 iterations x ~200-300ms per model call |
-| Full master + spawn | Mic -> Whisper -> master -> device agent -> hardware complete | 4-7s | Master path (3-5s) + agent loop (0.5-2s) |
+| Full master + spawn | Global mic -> Whisper -> master -> device agent -> hardware complete | 4-7s | Master path (3-5s) + agent loop (0.5-2s) |
 | Vision reaction | Motion -> frame -> laptop vision -> state/spawn | 3-8s | Cooldown gate + network ~0.1s + Claude Vision ~1-2s + master ~1.5-3s + agent ~0.5-2s |
-| Emergency stop | Mic -> Whisper -> broadcast stop (command type) | 2-3s | Same as deterministic, but bypasses voice lock |
-
-If faster deterministic commands are needed, Whisper can run on the laptop instead (stream raw audio from Pi, transcribe on laptop — saves ~1s but adds streaming complexity). This is a stretch goal, not a V1 requirement.
+| Emergency stop | Global mic -> Whisper -> broadcast stop to Rover | 2-3s | Same as deterministic, but bypasses voice lock |
 
 The hot path is allowed to be slower than theoretical minimums if it is dramatically more reliable.
 
@@ -697,18 +711,19 @@ Do not build these before the demo works:
 
 A strong demo should show:
 
-1. Mirror hears "I need to lock in."
+1. Global mic hears "I need to lock in."
 2. Master updates state to focus mode and sends natural language instructions to devices.
-3. Luxo's agent interprets "switch to focus lighting, show determination" — picks its own color ramp and servo choreography.
+3. Lamp's agent interprets "switch to focus lighting, show determination" — picks its own color ramp and servo choreography.
 4. Mirror's agent interprets "encourage the user briefly" — generates and speaks its own line.
-5. Chef's agent interprets "bring coffee, they're locking in" — drives to user with appropriate pacing.
+5. Rover's agent interprets "head over to the user with their supplies" — drives to user with appropriate pacing.
 
 Second beat:
 
-1. A vision-capable device, Luxo or Mirror, notices fatigue cues.
+1. A camera (global or Mirror's) notices fatigue cues.
 2. Master updates state from focused to tired and sends new instructions.
 3. Mirror's agent decides how to suggest a break in its own voice.
-4. Luxo's agent decides how to soften lighting with its own timing.
+4. Lamp's agent decides how to soften lighting with its own timing.
+5. Radio's agent starts playing calming music.
 
 That is enough to demonstrate the product. The two-tier model makes it visually richer — each device responds with its own personality, not with scripted master commands.
 
@@ -717,7 +732,7 @@ That is enough to demonstrate the product. The two-tier model makes it visually 
 For live presentations, the periodic tick timer (2-5 min) is too slow to trigger during a 3-minute demo. The control plane should support a **demo mode** where:
 
 - A hotkey or presentation clicker injects `tick` events on demand via `POST /events`.
-- This allows the presenter to trigger proactive behavior (e.g., Chef offering water, vision-driven mood response) at exactly the right moment.
+- This allows the presenter to trigger proactive behavior (e.g., Rover delivering items, vision-driven mood response) at exactly the right moment.
 - Demo mode does not change the architecture — it just uses the existing operator API for manual event injection.
 
 ### Virtual Device Fallback
@@ -733,14 +748,16 @@ Implement in this order:
 1. Canonical schemas (`schemas.py`) and control-plane app (`app.py` with WebSocket ConnectionManager)
 2. Virtual device harness — a terminal script simulating 4 WS connections that sends fake events and prints received commands/spawns. Enables control-plane development without Pi hardware.
 3. State store and event log (`state.py`)
-4. Deterministic router (`router.py`) with emergency stop (uses `command` type for direct dispatch)
+4. Deterministic router (`router.py`) with emergency stop (uses `command` type for direct dispatch to Rover)
 5. Master reasoning loop (`master.py`) with tool-calling contract and prompt assembly (uses `send_to_*` tools that emit `spawn` messages)
 6. Device agent loop (`agent.py`) and pluggable model client (`model_client.py`) — receives spawn instructions, calls fast inference API, executes hardware tools, loops until done
-7. Mirror voice pipeline (`device_runtime/voice.py`) with voice lock
-8. Luxo action path (`device_runtime/hardware.py` servo + LED control) — wired into agent loop for spawn instructions, direct execution for commands
-9. Chef and Purse command execution (motors, tray) — wired into agent loop
-10. Centralized vision (`vision.py`) with vision_result trigger
-11. Proactive behaviors (periodic tick timer)
+7. Global mic voice pipeline (`voice/voice.py`) with voice lock
+8. Lamp action path (`device_runtime/hardware.py` servo + LED control) — wired into agent loop for spawn instructions, direct execution for commands
+9. Mirror action path (camera + speaker + tilt) — wired into agent loop
+10. Radio action path (speaker + music playback) — wired into agent loop
+11. Rover action path (motors + encoders) — wired into agent loop, with reflex layer for stall detection
+12. Centralized vision (`vision.py`) with vision_result trigger (global camera + Mirror camera)
+13. Proactive behaviors (periodic tick timer)
 
 If something conflicts with this document, update this document and the Mermaid files before building further.
 
@@ -757,10 +774,10 @@ V1 exposes exactly six tools:
 | Tool | Purpose |
 |---|---|
 | `update_user_state` | Patch `state.json` when the event changes inferred mode, mood, or energy |
+| `send_to_lamp` | Send a natural language instruction to Lamp |
 | `send_to_mirror` | Send a natural language instruction to Mirror |
-| `send_to_luxo` | Send a natural language instruction to Luxo |
-| `send_to_chef` | Send a natural language instruction to Chef |
-| `send_to_purse` | Send a natural language instruction to Purse |
+| `send_to_radio` | Send a natural language instruction to Radio |
+| `send_to_rover` | Send a natural language instruction to Rover |
 | `no_op` | Explicitly record that this event requires no action |
 
 One tool per device, not one per action (too many tools, less reliable), and not one generic `send_to_device` (too permissive, loses per-device personality context in the tool name).
@@ -772,9 +789,9 @@ Each `send_to_*` tool accepts a single `instruction` parameter (string) — free
 Claude returns multiple `tool_use` blocks in one response. Example for "I need to lock in":
 
 1. `update_user_state({mode: "focus", mood: "determined"})`
-2. `send_to_luxo({instruction: "Switch to focus mode lighting. Show some determination — perk up, you're ready to work."})`
+2. `send_to_lamp({instruction: "Switch to focus mode lighting. Show some determination — perk up, you're ready to work."})`
 3. `send_to_mirror({instruction: "Give the user a short, warm encouragement. They're locking in. Keep it brief — they want to focus, not chat."})`
-4. `send_to_chef({instruction: "Head over to the user with coffee. They're entering focus mode — be efficient, not chatty."})`
+4. `send_to_rover({instruction: "Head over to the user with their supplies. They're entering focus mode — be efficient."})`
 
 The master is verbose about WHAT and WHY. The device agent decides HOW.
 
@@ -821,10 +838,9 @@ When a device receives a `spawn` message, the agent loop:
 
 These are interrupt handlers that PREEMPT everything:
 
-- Emergency stop received -> kill motors immediately
-- Sensor threshold breach (e.g., distance < 10cm) -> stop motors
-- Encoder stall detected -> stop motors
-- VAD speech-start -> acknowledgment gesture (Mirror tilt)
+- Emergency stop received -> kill motors immediately (Rover)
+- Encoder stall detected -> stop motors (Rover)
+- Sensor threshold breach (e.g., distance < 10cm) -> stop motors (Rover)
 
 **Layer 1 — Direct Commands (no model, immediate)**
 

@@ -1,3 +1,3 @@
-# Mirror
+# Lamp
 
 Personality TBD.

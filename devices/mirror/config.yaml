@@ -1,5 +1,6 @@
-# Mirror — The Desk Companion
-# Encouraging, warm. The one the user talks to face-to-face.
+# Mirror — Primary conversational device
+# Has its OWN camera (face-to-face with user), speaker, tilt servo
+# No mic (global mic is separate)
 
 device_id: mirror
 device_name: Mirror
@@ -8,16 +9,16 @@ device_type: companion
 network:
   ip: "192.168.1.102"        # UPDATE with actual Pi IP
   ssh_user: pi
-  master_url: "http://192.168.1.10:8000"
+  master_url: "http://192.168.1.10:8000"  # UPDATE with master laptop IP
 
 hardware:
   servos:
     type: pca9685_i2c
     i2c_address: 0x40
     channels:
-      tilt: 0                 # Single servo — tilt the mirror face
+      tilt: 0                # UPDATE — single servo, tilt the mirror face
     servo_range:
-      min_pulse: 500
+      min_pulse: 500         # UPDATE
       max_pulse: 2400
       min_angle: 0
       max_angle: 180
@@ -26,26 +27,22 @@ hardware:
 
   camera:
     type: usb
-    device: "/dev/video0"
+    device: "/dev/video0"    # UPDATE if needed
     resolution: [640, 480]
-
-  microphone:
-    type: usb
-    device: null
+    # Mirror's OWN camera — face-to-face with the user
+    # Used for mood, appearance, and expression analysis
+    # Frames sent to control plane for Claude Vision
 
   speaker:
     enabled: true
-    type: usb                 # "usb" or "i2s"
-    # i2s_pins:               # Uncomment if using I2S
-    #   bclk: 18
-    #   lrclk: 19
-    #   data: 21
+    type: usb                # UPDATE — "usb" or "i2s"
+
+  # No mic — global mic handles all voice input
 
 capabilities:
-  - see
-  - hear
-  - speak
-  - move_tilt
+  - see                      # Mirror's own camera (face-to-face)
+  - speak                    # TTS output
+  - move_tilt                # Tilt servo for physical expression
 
 actions:
   speak:

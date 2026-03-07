@@ -1,0 +1,36 @@
+# Radio — Stationary audio device
+# Speaker for music and speech. No motors, no camera, no mic.
+
+device_id: radio
+device_name: Radio
+device_type: speaker
+
+network:
+  ip: "192.168.1.103"        # UPDATE with actual Pi IP
+  ssh_user: pi
+  master_url: "http://192.168.1.10:8000"  # UPDATE with master laptop IP
+
+hardware:
+  speaker:
+    enabled: true
+    type: usb                # UPDATE — "usb" or "i2s"
+
+  # No motors, no camera, no mic
+
+capabilities:
+  - speak                    # TTS output
+  - play_music               # Music playback
+
+actions:
+  speak:
+    description: "Say something to the user through TTS"
+    params: {message: str}
+  play_music:
+    description: "Play music or ambient audio"
+    params: {genre: str}
+  set_volume:
+    description: "Set speaker volume (0-100)"
+    params: {volume: int}
+  change_genre:
+    description: "Switch to a different music genre or mood"
+    params: {genre: str}
