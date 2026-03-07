@@ -22,35 +22,56 @@ hardware:
     brightness_scale: 1.0
 
   arm:
-    type: so101_serial
+    type: so101_feetech
+    lerobot:
+      robot_type: "so101_follower"
+      robot_id: "lamp_arm"
+      calibration_path: "/home/lamp/Desktop/calibration/lamp_arm.json"
+    motor_model: "sts3215"
+    norm_mode: "RANGE_M100_100"
     serial:
-      port: "/dev/ttyUSB0"
-      baud_rate: 115200
+      port: "/dev/ttyACM0"
+      baud_rate: 1000000
       timeout_s: 1.0
-    controller:
-      protocol: jsonl
-      command_topic: "set_joint_angles"
+    readback:
+      register: "Present_Position"
+      response_timeout_s: 2.0
+    motion:
+      raw_frame_ms: 60
+      min_raw_frames: 3
+      max_raw_frames: 8
     joints:
       base_yaw:
         servo_id: 1
+        calibration_name: "shoulder_pan"
         min_angle: 0
         max_angle: 180
         home_angle: 90
         link_angle_offset_deg: 0
-      shoulder:
+      shoulder_pitch:
         servo_id: 2
+        calibration_name: "shoulder_lift"
         min_angle: 15
         max_angle: 165
         home_angle: 95
         link_angle_offset_deg: 0
       elbow:
         servo_id: 3
+        calibration_name: "elbow_flex"
         min_angle: 0
         max_angle: 170
         home_angle: 110
         link_angle_offset_deg: 0
-      wrist:
+      wrist_pitch:
         servo_id: 4
+        calibration_name: "wrist_flex"
+        min_angle: 0
+        max_angle: 180
+        home_angle: 90
+        link_angle_offset_deg: 0
+      wrist_roll:
+        servo_id: 5
+        calibration_name: "wrist_roll"
         min_angle: 0
         max_angle: 180
         home_angle: 90
@@ -70,9 +91,10 @@ presets:
   home:
     joints:
       base_yaw: 90
-      shoulder: 95
+      shoulder_pitch: 95
       elbow: 110
-      wrist: 90
+      wrist_pitch: 90
+      wrist_roll: 90
     color:
       r: 255
       g: 180
@@ -81,9 +103,10 @@ presets:
   focus:
     joints:
       base_yaw: 90
-      shoulder: 78
+      shoulder_pitch: 78
       elbow: 122
-      wrist: 82
+      wrist_pitch: 82
+      wrist_roll: 90
     color:
       r: 90
       g: 160
@@ -92,9 +115,10 @@ presets:
   relax:
     joints:
       base_yaw: 90
-      shoulder: 110
+      shoulder_pitch: 110
       elbow: 95
-      wrist: 105
+      wrist_pitch: 105
+      wrist_roll: 90
     color:
       r: 255
       g: 150
@@ -103,9 +127,10 @@ presets:
   alert:
     joints:
       base_yaw: 90
-      shoulder: 70
+      shoulder_pitch: 70
       elbow: 140
-      wrist: 70
+      wrist_pitch: 70
+      wrist_roll: 90
     color:
       r: 255
       g: 40
@@ -114,9 +139,10 @@ presets:
   curious:
     joints:
       base_yaw: 110
-      shoulder: 82
+      shoulder_pitch: 82
       elbow: 126
-      wrist: 70
+      wrist_pitch: 70
+      wrist_roll: 110
     color:
       r: 120
       g: 255
@@ -140,12 +166,13 @@ actions:
     params:
       brightness: float
   set_joint_angles:
-    description: "Set all four SO-101 joint targets"
+    description: "Set all five SO-101 joint targets"
     params:
       base_yaw: float
-      shoulder: float
+      shoulder_pitch: float
       elbow: float
-      wrist: float
+      wrist_pitch: float
+      wrist_roll: float
   move_to_preset:
     description: "Move the arm to a named preset pose"
     params:

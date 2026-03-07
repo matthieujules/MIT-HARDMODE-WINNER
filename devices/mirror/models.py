@@ -33,3 +33,4 @@ class GenerationResult:
     source: str
     saved_path: Path
     metadata: dict[str, Any] = field(default_factory=dict)
+    api_error: str | None = None

@@ -25,10 +25,11 @@ def geometry_from_config(config: dict) -> ArmGeometry:
 
 
 def forward_kinematics_mm(joint_angles: dict[str, float], geometry: ArmGeometry) -> dict[str, float]:
-    base = radians(float(joint_angles["base_yaw"]) - 90.0)
-    shoulder = radians(float(joint_angles["shoulder"]) - 90.0)
-    elbow = radians(float(joint_angles["elbow"]) - 90.0)
-    wrist = radians(float(joint_angles["wrist"]) - 90.0)
+    base = radians(float(joint_angles.get("base_yaw", 90.0)) - 90.0)
+    shoulder = radians(float(joint_angles.get("shoulder_pitch", 90.0)) - 90.0)
+    elbow = radians(float(joint_angles.get("elbow", 90.0)) - 90.0)
+    wrist = radians(float(joint_angles.get("wrist_pitch", 90.0)) - 90.0)
+    wrist_roll = float(joint_angles.get("wrist_roll", 90.0))
 
     shoulder_line = shoulder
     elbow_line = shoulder_line + elbow
@@ -51,4 +52,5 @@ def forward_kinematics_mm(joint_angles: dict[str, float], geometry: ArmGeometry)
         "x": round(radial * cos(base), 2),
         "y": round(radial * sin(base), 2),
         "z": round(height, 2),
+        "tool_roll_deg": round(wrist_roll, 2),
     }

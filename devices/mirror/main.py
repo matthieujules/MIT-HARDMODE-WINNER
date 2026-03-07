@@ -106,6 +106,8 @@ def process_instruction(
     print(f"frame_source: {frame.source}")
     print(f"plan_mode: {plan.display_mode}")
     print(f"image_source: {result.source}")
+    if result.api_error:
+        print(f"api_error: {result.api_error}")
     print(f"saved_image: {result.saved_path}")
     print(f"display_output: {screen_path}")
 

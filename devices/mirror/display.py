@@ -33,7 +33,7 @@ class MirrorDisplay:
 
         screen_w = root.winfo_screenwidth()
         screen_h = root.winfo_screenheight()
-        rendered = image.convert("RGB").resize((screen_w, screen_h), Image.Resampling.LANCZOS)
+        rendered = self._fit_for_screen(image.convert("RGB"), screen_w, screen_h)
         photo = ImageTk.PhotoImage(rendered)
 
         label = tk.Label(root, image=photo, bg="black", borderwidth=0, highlightthickness=0)
@@ -44,3 +44,17 @@ class MirrorDisplay:
             root.after(hold_seconds * 1000, root.destroy)
         root.mainloop()
         return latest
+
+    def _fit_for_screen(self, image: Image.Image, screen_w: int, screen_h: int) -> Image.Image:
+        rotate_mode = os.getenv("MIRROR_ROTATE", "auto").strip().lower()
+        rendered = image
+
+        if rotate_mode in {"90", "270", "180"}:
+            rendered = rendered.rotate(int(rotate_mode), expand=True)
+        elif rotate_mode == "auto":
+            screen_is_landscape = screen_w > screen_h
+            image_is_portrait = rendered.height > rendered.width
+            if screen_is_landscape and image_is_portrait:
+                rendered = rendered.rotate(90, expand=True)
+
+        return rendered.resize((screen_w, screen_h), Image.Resampling.LANCZOS)

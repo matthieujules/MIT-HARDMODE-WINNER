@@ -21,9 +21,16 @@ JOINT_ALIASES = {
     "base": "base_yaw",
     "base_yaw": "base_yaw",
     "yaw": "base_yaw",
-    "shoulder": "shoulder",
+    "shoulder": "shoulder_pitch",
+    "shoulder_pitch": "shoulder_pitch",
+    "pitch": "wrist_pitch",
     "elbow": "elbow",
-    "wrist": "wrist",
+    "wrist": "wrist_pitch",
+    "wrist_pitch": "wrist_pitch",
+    "wristpitch": "wrist_pitch",
+    "roll": "wrist_roll",
+    "wrist_roll": "wrist_roll",
+    "wristroll": "wrist_roll",
 }
 
 PRESET_HINTS = {
@@ -37,6 +44,8 @@ PRESET_HINTS = {
     "inspect": "curious",
     "home": "home",
     "reset": "home",
+    "look at user": "curious",
+    "look_at_user": "curious",
 }
 
 
@@ -47,6 +56,7 @@ class ArmPlan:
     color: dict[str, int]
     brightness: float
     duration_ms: int
+    light_frames: list[tuple[int, int, int, int]] = field(default_factory=list)
     preset: str | None = None
     notes: list[str] = field(default_factory=list)
 
@@ -85,6 +95,10 @@ class InstructionPlanner:
             base_color.update(explicit_color)
             notes.append("applied explicit RGB/color override")
 
+        explicit_frames = self._parse_light_frames(lowered)
+        if explicit_frames:
+            notes.append("applied explicit RGB frame animation")
+
         brightness = self._parse_brightness(lowered)
         if brightness is None:
             brightness = float(self.config["hardware"]["lemp"].get("brightness_scale", 1.0))
@@ -103,6 +117,7 @@ class InstructionPlanner:
             raw_instruction=text,
             joints=base_joints,
             color=base_color,
+            light_frames=explicit_frames,
             brightness=brightness,
             duration_ms=duration_ms,
             preset=preset_name,
@@ -118,7 +133,7 @@ class InstructionPlanner:
     def _parse_joint_angles(self, lowered: str) -> dict[str, float]:
         matches: dict[str, float] = {}
         pattern = re.compile(
-            r"\b(base_yaw|base|yaw|shoulder|elbow|wrist)\s*(?:to|at|=|:)?\s*(-?\d+(?:\.\d+)?)\b"
+            r"\b(base_yaw|base|yaw|shoulder|shoulder_pitch|elbow|wrist|wrist_pitch|wristpitch|roll|wrist_roll|wristroll|pitch)\s*(?:to|at|=|:)?\s*(-?\d+(?:\.\d+)?)\b"
         )
         for alias, value in pattern.findall(lowered):
             matches[JOINT_ALIASES[alias]] = float(value)
@@ -151,6 +166,23 @@ class InstructionPlanner:
             percent = max(0.0, min(100.0, float(percent_match.group(1))))
             return round(percent / 100.0, 3)
         return None
+
+    def _parse_light_frames(self, lowered: str) -> list[tuple[int, int, int, int]]:
+        matches = re.findall(
+            r"(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,5})",
+            lowered,
+        )
+        frames: list[tuple[int, int, int, int]] = []
+        for r_value, g_value, b_value, t_value in matches:
+            frames.append(
+                (
+                    self._clamp_rgb(int(r_value)),
+                    self._clamp_rgb(int(g_value)),
+                    self._clamp_rgb(int(b_value)),
+                    max(0, int(t_value)),
+                )
+            )
+        return frames
 
     def _parse_duration_ms(self, lowered: str) -> int | None:
         seconds_match = re.search(r"\b(?:duration|over|for)\s*(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?\b", lowered)

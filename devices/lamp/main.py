@@ -64,7 +64,10 @@ def print_banner(config: dict, simulate: bool) -> None:
         "LEMP PWM pins: "
         f"R={pins['red']} G={pins['green']} B={pins['blue']}"
     )
-    print("Type joint commands like 'base 120 shoulder 80 elbow 130 wrist 70 blue'.")
+    print(
+        "Type joint commands like "
+        "'base 120 shoulder 80 elbow 130 wrist 70 roll 110 blue'."
+    )
     print("Type 'focus', 'relax', 'alert', or 'home' for presets.")
     print("Type 'quit' to exit.")
 
@@ -86,6 +89,8 @@ def process_instruction(
         print(f"Preset: {plan.preset}")
     print(f"Joints: {format_joint_map(plan.joints)}")
     print(f"Color: {plan.color} @ brightness={plan.brightness}")
+    if plan.light_frames:
+        print(f"Light frames: {plan.light_frames}")
     print(f"Duration: {plan.duration_ms} ms")
     print(f"Notes: {', '.join(plan.notes)}")
 
