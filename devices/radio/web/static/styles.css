@@ -99,10 +99,32 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.spotify-link {
+  display: inline-block;
+  margin-top: 12px;
+  border: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #1db954;
+  color: white;
+  font-weight: 600;
+  text-decoration: none;
+}
+
 .meta {
   margin-top: 10px;
   color: #a8b1c6;
   font-size: 14px;
+}
+
+#spotifyStatus.connected {
+  color: #7af7a0;
+}
+
+#downloadLinks a {
+  color: #7aa7ff;
+  text-decoration: underline;
+  margin-right: 10px;
 }
 
 pre {

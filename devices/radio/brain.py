@@ -1,4 +1,5 @@
 import base64
+import concurrent.futures
 import json
 import os
 import random
@@ -22,7 +23,6 @@ load_dotenv(RADIO_DIR / ".env")
 
 class PodcastClip(BaseModel):
     text: str
-    seconds: int = Field(default=2, ge=2, le=2)
     delivery_style: str = "neutral podcast"
     instructions: str = "Speak like a warm podcast host."
     voice: str = "nova"
@@ -31,7 +31,6 @@ class PodcastClip(BaseModel):
 class RadioPlan(BaseModel):
     action: Literal["output_music", "output_podcast"]
     turn_radio: bool = True
-    volume: int = Field(default=45, ge=0, le=100)
     spotify_query: str = ""
     spotify_market: str = "US"
     spotify_limit: int = Field(default=1, ge=1, le=5)
@@ -44,25 +43,21 @@ def fallback_plan(command: str) -> RadioPlan:
         return RadioPlan(
             action="output_podcast",
             turn_radio=True,
-            volume=42,
             podcast_clips=[
                 PodcastClip(
-                    text="Welcome to today's quick update.",
-                    seconds=2,
+                    text="Welcome back to today's home update",
                     delivery_style="cheerful podcast",
                     instructions="Speak like a cheerful podcast host. Warm, natural, conversational, fast pace.",
                     voice="marin",
                 ),
                 PodcastClip(
-                    text="Here is your main story in a serious tone.",
-                    seconds=2,
+                    text="Main story now from your smart home",
                     delivery_style="serious podcast",
                     instructions="Speak like a thoughtful podcast host. Warm, natural, conversational, medium pace.",
                     voice="onyx",
                 ),
                 PodcastClip(
-                    text="That wraps this segment. Turning the dial now.",
-                    seconds=2,
+                    text="That wraps this segment for now",
                     delivery_style="fun podcast",
                     instructions="Speak like a witty podcast host. Conversational and playful, quick pace.",
                     voice="fable",
@@ -74,7 +69,6 @@ def fallback_plan(command: str) -> RadioPlan:
     return RadioPlan(
         action="output_music",
         turn_radio=True,
-        volume=55,
         spotify_query=cleaned,
         spotify_market="US",
         spotify_limit=1,
@@ -93,11 +87,10 @@ def normalize_podcast_clips(plan: RadioPlan) -> RadioPlan:
     while len(normalized) < 2:
         if normalized:
             base_clip = normalized[-1]
-            next_text = f"{base_clip.text} Next short segment."
+            next_text = "Next short update from your radio"
             normalized.append(
                 PodcastClip(
                     text=next_text,
-                    seconds=2,
                     delivery_style=base_clip.delivery_style,
                     instructions=base_clip.instructions,
                     voice=base_clip.voice or "nova",
@@ -106,8 +99,7 @@ def normalize_podcast_clips(plan: RadioPlan) -> RadioPlan:
         else:
             normalized.append(
                 PodcastClip(
-                    text="Quick podcast segment.",
-                    seconds=2,
+                    text="Quick update from your home radio",
                     delivery_style="neutral podcast",
                     instructions="Speak like a concise podcast host. Warm and conversational, fast pace.",
                     voice="nova",
@@ -115,7 +107,6 @@ def normalize_podcast_clips(plan: RadioPlan) -> RadioPlan:
             )
 
     for clip in normalized:
-        clip.seconds = 2
         style = (clip.delivery_style or "").strip()
         clip.delivery_style = style if style.endswith(" podcast") else f"{style or 'neutral'} podcast"
         if not clip.instructions.strip():
@@ -158,9 +149,9 @@ def openai_plan_call(command: str) -> RadioPlan:
         "Rules:\n"
         "- action must be output_music or output_podcast\n"
         "- turn_radio must always be true\n"
-        "- volume must be 0-100\n"
         "- if output_music: fill spotify_query, spotify_market, spotify_limit\n"
-        "- if output_podcast: return 2-4 clips and set each clip to exactly 2 seconds\n"
+        "- if output_podcast: return 2-4 clips\n"
+        "- each podcast clip text must be between 5 and 8 words\n"
         "- each podcast clip must include delivery_style, instructions, and voice\n"
         "- delivery_style must be adjective + ' podcast' (examples: fun podcast, sad podcast, serious podcast)\n"
         "- voice must be one of: alloy, ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer, verse, marin, cedar\n"
@@ -178,7 +169,6 @@ def openai_plan_call(command: str) -> RadioPlan:
             "properties": {
                 "action": {"type": "string", "enum": ["output_music", "output_podcast"]},
                 "turn_radio": {"type": "boolean"},
-                "volume": {"type": "integer", "minimum": 0, "maximum": 100},
                 "spotify_query": {"type": "string"},
                 "spotify_market": {"type": "string"},
                 "spotify_limit": {"type": "integer", "minimum": 1, "maximum": 5},
@@ -190,8 +180,7 @@ def openai_plan_call(command: str) -> RadioPlan:
                         "type": "object",
                         "additionalProperties": False,
                         "properties": {
-                            "text": {"type": "string"},
-                            "seconds": {"type": "integer", "enum": [2]},
+                            "text": {"type": "string", "minLength": 5, "maxLength": 80},
                             "delivery_style": {"type": "string"},
                             "instructions": {"type": "string"},
                             "voice": {
@@ -213,14 +202,13 @@ def openai_plan_call(command: str) -> RadioPlan:
                                 ]
                             },
                         },
-                        "required": ["text", "seconds", "delivery_style", "instructions", "voice"],
+                        "required": ["text", "delivery_style", "instructions", "voice"],
                     },
                 },
             },
             "required": [
                 "action",
                 "turn_radio",
-                "volume",
                 "spotify_query",
                 "spotify_market",
                 "spotify_limit",
@@ -272,7 +260,6 @@ def output_music(plan: RadioPlan) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "function": "output_music",
         "turn_radio": plan.turn_radio,
-        "volume": plan.volume,
         "dial_events": [
             {
                 "event": "music_function_called",
@@ -364,9 +351,9 @@ def output_podcast(plan: RadioPlan) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "function": "output_podcast",
         "turn_radio": plan.turn_radio,
-        "volume": plan.volume,
         "clips_requested": [clip.model_dump() for clip in plan.podcast_clips],
         "clips_generated": [],
+        "audio_items": [],
         "dial_events": [],
     }
 
@@ -397,15 +384,13 @@ def output_podcast(plan: RadioPlan) -> Dict[str, Any]:
     request_id = int(time.time() * 1000)
     start_gender = random.choice(["male", "female"])
 
+    clip_jobs = []
     for idx, clip in enumerate(plan.podcast_clips, start=1):
-        out_file = OUTPUT_DIR / f"podcast_{request_id}_{idx}.mp3"
         planned_voice = normalize_voice(clip.voice, default_voices)
         target_gender = start_gender if idx % 2 == 1 else ("female" if start_gender == "male" else "male")
         gender_pool = male_voices if target_gender == "male" else female_voices
-        if planned_voice:
-            selected_voice = planned_voice
-        else:
-            selected_voice = random.choice(gender_pool)
+        selected_voice = planned_voice if planned_voice else random.choice(gender_pool)
+        clip_jobs.append((idx, clip, selected_voice))
         payload["dial_events"].append(
             {
                 "event": "tts_function_called",
@@ -413,6 +398,10 @@ def output_podcast(plan: RadioPlan) -> Dict[str, Any]:
                 "degrees": DIAL_STEP_DEGREES,
             }
         )
+
+    def synthesize_clip(job: tuple[int, PodcastClip, str]) -> Dict[str, Any]:
+        idx, clip, selected_voice = job
+        out_file = OUTPUT_DIR / f"podcast_{request_id}_{idx}.mp3"
         try:
             with httpx.Client(timeout=45.0) as client:
                 resp = client.post(
@@ -423,36 +412,51 @@ def output_podcast(plan: RadioPlan) -> Dict[str, Any]:
                         "voice": selected_voice,
                         "input": clip.text,
                         "instructions": clip.instructions,
-                        "speed": 4.0,
+                        "speed": 1.4,
                         "response_format": "mp3",
                     },
                 )
                 resp.raise_for_status()
 
             out_file.write_bytes(resp.content)
-            payload["clips_generated"].append(
-                {
-                    "index": idx,
-                    "text": clip.text,
-                    "seconds": clip.seconds,
-                    "delivery_style": clip.delivery_style,
-                    "instructions": clip.instructions,
-                    "voice": clip.voice,
-                    "selected_voice": selected_voice,
-                    "file": f"/output/{out_file.name}",
-                }
-            )
+            return {
+                "index": idx,
+                "text": clip.text,
+                "delivery_style": clip.delivery_style,
+                "instructions": clip.instructions,
+                "voice": clip.voice,
+                "selected_voice": selected_voice,
+                "audio_url": f"/output/{out_file.name}",
+                "audio_file": str(out_file),
+            }
         except Exception as exc:
-            payload["clips_generated"].append(
+            return {
+                "index": idx,
+                "text": clip.text,
+                "delivery_style": clip.delivery_style,
+                "instructions": clip.instructions,
+                "voice": clip.voice,
+                "selected_voice": selected_voice,
+                "error": str(exc),
+            }
+
+    max_workers = min(4, max(1, len(clip_jobs)))
+    results_by_index: Dict[int, Dict[str, Any]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {executor.submit(synthesize_clip, job): job[0] for job in clip_jobs}
+        for future in concurrent.futures.as_completed(future_map):
+            result = future.result()
+            results_by_index[result["index"]] = result
+
+    for idx in sorted(results_by_index.keys()):
+        result = results_by_index[idx]
+        payload["clips_generated"].append(result)
+        if result.get("audio_url"):
+            payload["audio_items"].append(
                 {
                     "index": idx,
-                    "text": clip.text,
-                    "seconds": clip.seconds,
-                    "delivery_style": clip.delivery_style,
-                    "instructions": clip.instructions,
-                    "voice": clip.voice,
-                    "selected_voice": selected_voice,
-                    "error": str(exc),
+                    "audio_url": result["audio_url"],
+                    "audio_file": result["audio_file"],
                 }
             )
 
@@ -461,7 +465,8 @@ def output_podcast(plan: RadioPlan) -> Dict[str, Any]:
         "type": "podcast",
         "status": "playing" if payload["clips_generated"] else "playing_no_audio",
         "message": "Playing generated podcast clips in browser.",
-        "audio_queue": [clip["file"] for clip in payload["clips_generated"] if clip.get("file")],
+        "audio_queue": [clip["audio_url"] for clip in payload["clips_generated"] if clip.get("audio_url")],
+        "audio_items": payload["audio_items"],
         "dial_events": payload["dial_events"],
     }
     return payload

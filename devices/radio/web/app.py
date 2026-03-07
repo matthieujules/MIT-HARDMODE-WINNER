@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -31,6 +32,14 @@ class CommandRequest(BaseModel):
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/api/web-config")
+def web_config() -> Dict[str, Any]:
+    spotify_web_client_id = os.getenv("SPOTIFY_WEB_CLIENT_ID", "").strip() or os.getenv("SPOTIFY_CLIENT_ID", "").strip()
+    return {
+        "spotify_web_client_id": spotify_web_client_id,
+    }
 
 
 @app.post("/api/radio/command")
