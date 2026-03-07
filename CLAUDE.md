@@ -24,7 +24,7 @@ Only the `.mmd` sources are tracked. Rendered exports should be treated as dispo
 
 - Python 3.11+
 - FastAPI control plane on the laptop
-- Claude Sonnet 4.6 as the default master model
+- Claude Opus 4.6 (1M context, beta header `context-1m-2025-08-07`) as the master model
 - Claude Vision called centrally from the laptop
 - Whisper + VAD on the primary voice device
 - simple device runtimes on Raspberry Pis

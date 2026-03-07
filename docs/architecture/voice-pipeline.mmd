@@ -9,7 +9,7 @@ graph LR
     subgraph CONTROL["LAPTOP CONTROL PLANE"]
         api["WebSocket receiver<br/>(or direct call if mic on laptop)"]
         route["Deterministic router"]
-        master["Master model<br/>Claude Sonnet 4.6"]
+        master["Master model<br/>Claude Opus 4.6 (1M ctx)"]
     end
 
     subgraph DIRECT["DIRECT COMMAND PATH (no model)"]

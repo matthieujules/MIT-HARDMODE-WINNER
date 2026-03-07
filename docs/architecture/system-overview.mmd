@@ -12,7 +12,7 @@ graph TB
     subgraph LAPTOP["LAPTOP CONTROL PLANE"]
         api["FastAPI app<br/>HTTP + WebSocket"]
         router["Deterministic router<br/>simple direct commands"]
-        master["Master model<br/>Claude Sonnet 4.6<br/>(reasoning tier)"]
+        master["Master model<br/>Claude Opus 4.6 (1M ctx)<br/>(reasoning tier)"]
         vision["Centralized vision<br/>Claude Vision"]
         state["State store<br/>data/user.md + devices.json<br/>state.json + event_log.jsonl"]
         voice_pipeline["Voice pipeline<br/>VAD + Whisper<br/>(if global mic on laptop)"]

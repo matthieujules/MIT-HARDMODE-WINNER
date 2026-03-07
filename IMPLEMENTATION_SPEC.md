@@ -198,9 +198,12 @@ These go to the master model, which responds with natural language instructions 
 
 V1 uses a single master model on the laptop:
 
-- default: Claude Sonnet 4.6
+- **Claude Opus 4.6** with 1M token context window
+- API model ID: `claude-opus-4-6`
+- Beta header: `context-1m-2025-08-07` (enables 1M context)
+- Long-context pricing applies above 200K tokens per request
 
-Opus is not part of the core V1 design. It can be tested later if quality demands it.
+The 1M context window means the master can ingest extensive event history, all SOUL.md files, and rich state without truncation pressure. Prompt assembly truncation limits (Section 13) remain as guardrails but can be relaxed if needed.
 
 ---
 
@@ -228,7 +231,7 @@ Both follow the same capture and transport pattern:
 
 ### Control-Plane (vision.py)
 
-5. `vision.py` receives the frame and calls Claude Vision (Sonnet) with a structured prompt:
+5. `vision.py` receives the frame and calls Claude Vision (Opus 4.6) with a structured prompt:
 
 ```
 Analyze this camera frame from a smart home device.
@@ -252,7 +255,7 @@ The `vision_result` event includes a `source_device` field indicating whether th
 
 ## 8. Control Plane Responsibilities
 
-The control plane owns all shared intelligence.
+The control plane owns all shared intelligence. The master model is Claude Opus 4.6 with 1M context (see Section 6).
 
 ### Responsibilities
 
@@ -539,7 +542,7 @@ This means personality is genuinely owned by the device, not ventriloquized by t
 | Package | Purpose |
 |---|---|
 | `fastapi` + `uvicorn` | HTTP + WebSocket server |
-| `anthropic` | Claude Sonnet (master reasoning) + Claude Vision |
+| `anthropic` | Claude Opus 4.6 (master reasoning, 1M context) + Claude Vision |
 | `pydantic` | Message schemas, validation |
 
 No ORM, no database, no task queue. Stdlib `json` + file I/O for all persistence.

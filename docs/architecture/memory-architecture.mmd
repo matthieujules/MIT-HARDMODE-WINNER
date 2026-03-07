@@ -14,7 +14,7 @@ graph TB
     subgraph MASTER_TURN["MASTER PROMPT ASSEMBLY (per turn, laptop)"]
         m_current["Current triggering event"]
         m_prompt["Master prompt<br/>SOUL + USER + devices +<br/>state + recent events +<br/>current event"]
-        m_model["Claude Sonnet 4.6"]
+        m_model["Claude Opus 4.6 (1M ctx)"]
     end
 
     subgraph DEVICE_TURN["DEVICE AGENT PROMPT ASSEMBLY (per spawn, on device)"]
