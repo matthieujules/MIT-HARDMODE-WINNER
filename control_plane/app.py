@@ -148,9 +148,7 @@ async def process_event(event: DeviceEvent) -> dict:
     elif kind == "vision_result":
         return await _run_master_reasoning(event)
     elif kind == "frame":
-        # TODO: vision pipeline integration
-        logger.info("Frame received from %s — vision pipeline not yet integrated", event.device_id)
-        return {"status": "ok", "detail": "frame logged, vision not yet integrated"}
+        return await _handle_frame(event)
     else:
         logger.warning("Unknown event kind: %s", kind)
         return {"status": "error", "detail": f"unknown event kind: {kind}"}
@@ -221,6 +219,72 @@ async def _handle_manual_override(event: DeviceEvent) -> dict:
         return {"status": "error", "detail": "manual_override missing action or instruction"}
 
 
+# ── Vision frame handling ─────────────────────────────────────────
+
+
+async def _handle_frame(event: DeviceEvent) -> dict:
+    """Process camera frame: ack immediately, run vision analysis in background."""
+    image_b64 = event.payload.get("image_b64")
+    if not image_b64:
+        return {"status": "error", "detail": "frame missing image_b64"}
+
+    # Run vision analysis in background so the sidecar isn't blocked
+    asyncio.create_task(_process_frame_background(event.device_id, image_b64))
+    return {"status": "ok", "detail": "frame accepted, processing in background"}
+
+
+async def _process_frame_background(source_device: str, image_b64: str) -> None:
+    """Background task: Claude Vision analysis + conditional master trigger."""
+    from .vision import analyze_frame, should_trigger_master
+
+    try:
+        analysis = await asyncio.to_thread(analyze_frame, image_b64)
+    except Exception as e:
+        logger.error("Vision analysis error: %s", e)
+        return
+    if analysis is None:
+        return
+
+    # BUG FIX: snapshot state BEFORE writing updates so should_trigger_master
+    # compares against the old state, not the already-updated state.
+    previous_state = state_manager.read_state()
+
+    # Update state with vision results (including mood to prevent repeat triggers)
+    state_patch = {}
+    if "people_count" in analysis:
+        state_patch["people_count"] = analysis["people_count"]
+    if "activity" in analysis:
+        state_patch["activity"] = analysis["activity"]
+    if "mood" in analysis and analysis.get("mood_confidence", 0) >= 0.7:
+        state_patch["mood"] = analysis["mood"]
+    if state_patch:
+        state_manager.write_state(state_patch)
+
+    # Update user position from vision if available
+    user_pos = analysis.get("user_position")
+    if user_pos and "x_pct" in user_pos and "y_pct" in user_pos:
+        room_config = state_manager.read_room_config()
+        if room_config:
+            x_cm = user_pos["x_pct"] / 100.0 * room_config.get("width_cm", 500)
+            y_cm = user_pos["y_pct"] / 100.0 * room_config.get("height_cm", 400)
+            state_manager.update_spatial_device("user", {
+                "x_cm": round(x_cm), "y_cm": round(y_cm), "source": "camera"
+            })
+
+    # Check against PREVIOUS state (before we wrote updates)
+    if should_trigger_master(analysis, previous_state):
+        vision_event = DeviceEvent(
+            device_id="system",
+            kind="vision_result",
+            payload={
+                "analysis": analysis,
+                "previous_mood": previous_state.get("mood"),
+                "source_device": source_device,
+            },
+        )
+        await _run_master_reasoning(vision_event)
+
+
 # ── Master reasoning integration ──────────────────────────────────
 
 # Serial master lock — spec requires one reasoning turn at a time
@@ -249,7 +313,8 @@ async def _run_master_reasoning(event: DeviceEvent) -> dict:
 async def _run_master_reasoning_inner(event: DeviceEvent) -> dict:
     """Inner implementation, called under _master_lock."""
     try:
-        result = execute_master_turn(state_manager, event)
+        # Run the blocking LLM call in a thread to avoid starving the event loop
+        result = await asyncio.to_thread(execute_master_turn, state_manager, event)
     except Exception as e:
         logger.error("Master reasoning failed: %s", e)
         # Log the failure
@@ -471,6 +536,25 @@ async def calibrate_position(body: dict):
     state_manager.update_spatial_device(device_id, {
         "x_cm": x_cm, "y_cm": y_cm, "source": "manual_calibration"
     })
+    return {"status": "ok"}
+
+
+@app.post("/spatial/observe")
+async def spatial_observe(body: dict):
+    """Camera-based spatial position update.
+
+    Body: {"device_id": "rover", "x_cm": N, "y_cm": N, "theta_deg": N, "confidence": 0.9, "source": "camera"}
+    """
+    device_id = body.get("device_id")
+    if not device_id:
+        return {"status": "error", "detail": "missing device_id"}
+    patch = {}
+    for key in ("x_cm", "y_cm", "theta_deg", "confidence", "source"):
+        if key in body:
+            patch[key] = body[key]
+    if not patch:
+        return {"status": "error", "detail": "no position data"}
+    state_manager.update_spatial_device(device_id, patch)
     return {"status": "ok"}
 
 

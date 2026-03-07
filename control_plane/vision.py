@@ -1,0 +1,82 @@
+"""Claude Vision analysis for ClaudeHome.
+
+Receives base64 JPEG frames, calls Claude Vision API for scene analysis,
+compares against current state, and triggers master reasoning if significant changes detected.
+"""
+
+import json
+import logging
+import os
+
+from anthropic import Anthropic
+
+logger = logging.getLogger(__name__)
+
+_VISION_MODEL = os.getenv("VISION_MODEL", "claude-sonnet-4-6")
+
+VISION_PROMPT = """Analyze this camera frame from a smart home's top-down room camera.
+Return JSON only:
+{
+  "people_count": <number of people visible>,
+  "mood": "<happy|sad|stressed|tired|neutral|focused|relaxed>",
+  "mood_confidence": <0.0-1.0>,
+  "activity": "<brief description of what's happening>",
+  "notable": "<anything unusual, or null>",
+  "user_position": {"x_pct": <0-100>, "y_pct": <0-100>}
+}
+The x_pct/y_pct represent the user's approximate position as percentage of frame dimensions (0,0 = top-left).
+"""
+
+
+def analyze_frame(image_b64: str) -> dict | None:
+    """Call Claude Vision API with a base64 JPEG frame.
+    Returns parsed analysis dict, or None on error."""
+    try:
+        client = Anthropic()
+        response = client.messages.create(
+            model=_VISION_MODEL,
+            max_tokens=256,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": image_b64,
+                        },
+                    },
+                    {"type": "text", "text": VISION_PROMPT},
+                ],
+            }],
+        )
+        # Parse JSON from response
+        text = response.content[0].text.strip()
+        # Handle markdown code blocks
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        return json.loads(text)
+    except Exception as e:
+        logger.error("Vision analysis failed: %s", e)
+        return None
+
+
+def should_trigger_master(analysis: dict, current_state: dict) -> bool:
+    """Decide if this vision analysis warrants triggering master reasoning.
+
+    Triggers if:
+    - people_count changed
+    - mood changed AND confidence >= 0.7
+    """
+    if analysis is None:
+        return False
+
+    if analysis.get("people_count") != current_state.get("people_count"):
+        return True
+
+    if (analysis.get("mood") != current_state.get("mood")
+            and analysis.get("mood_confidence", 0) >= 0.7):
+        return True
+
+    return False
