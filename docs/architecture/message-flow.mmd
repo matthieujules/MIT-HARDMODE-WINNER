@@ -35,7 +35,7 @@ sequenceDiagram
 
     par Master dispatches NL intents to devices
         C-->>L: spawn: "Focus lighting, show determination — perk up"
-        C-->>M: spawn: "Say something encouraging about locking in"
+        C-->>M: spawn: "Show an encouraging visual about locking in"
         C-->>Rv: spawn: "Head over to the user with their supplies"
     end
 
@@ -48,7 +48,7 @@ sequenceDiagram
     L-->>C: action_result
 
     M->>MA: SOUL.md + HW tools + sensors + instruction
-    MA->>MA: plan: speak(encouragement)
+    MA->>MA: plan: display_image(encouragement_visual)
     MA-->>M: tool calls
     M->>M: execute hardware
     MA->>MA: check: done
@@ -73,7 +73,7 @@ sequenceDiagram
 
     par Master dispatches NL intents
         C-->>L: spawn: "Shift to warm relaxing light, gentle sway"
-        C-->>M: spawn: "Suggest taking a break, sound caring"
+        C-->>M: spawn: "Suggest taking a break with a gentle visual"
         C-->>Ra: spawn: "Play some calming music"
     end
 

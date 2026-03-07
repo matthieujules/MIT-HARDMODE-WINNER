@@ -20,14 +20,90 @@ Current diagrams:
 
 Only the `.mmd` sources are tracked. Rendered exports should be treated as disposable artifacts.
 
+## What's Built
+
+### Control Plane (fully working, tested with live API)
+
+| File | Purpose |
+|------|---------|
+| `control_plane/schemas.py` | Pydantic v2 models for all protocol messages |
+| `control_plane/state.py` | File-backed state persistence (state.json, devices.json, event_log.jsonl, master_log.jsonl) |
+| `control_plane/router.py` | Deterministic command router, emergency stop, voice lock |
+| `control_plane/app.py` | FastAPI app: endpoints, WebSocket ConnectionManager, event pipeline |
+| `control_plane/master.py` | Master reasoning engine (multi-provider: Anthropic + Cerebras) |
+| `control_plane/SOUL.md` | Master home personality and tool-use rules |
+| `requirements.txt` | Python dependencies |
+
+### Networking
+
+All device configs (`devices/*/config.yaml`) use Tailscale hostnames:
+- Laptop: `claude-master`
+- Pis: `lamp-pi`, `mirror-pi`, `radio-pi`, `rover-pi`
+- Setup script: `scripts/setup-pi-tailscale.sh`
+
+## How to Test
+
+```bash
+# 1. Install deps
+pip3 install -r requirements.txt
+
+# 2. Ensure .env has ANTHROPIC_API_KEY set
+
+# 3. Start the server
+python3 -m uvicorn control_plane.app:app --host 0.0.0.0 --port 8000
+
+# 4. Register devices
+curl -X POST localhost:8000/register -H 'Content-Type: application/json' \
+  -d '{"device_id":"lamp","device_name":"Lamp","device_type":"lamp","capabilities":["light","move_head","emote"],"actions":["set_color","set_brightness"],"ip":"lamp-pi"}'
+# Repeat for mirror, radio, rover (see test scripts in BUILD_PLAN.md)
+
+# 5. Test deterministic routing
+curl -X POST localhost:8000/events -H 'Content-Type: application/json' \
+  -d '{"device_id":"global_mic","kind":"transcript","event_kind":"transcript","payload":{"text":"lamp blue"}}'
+
+# 6. Test master reasoning (requires ANTHROPIC_API_KEY)
+curl -X POST localhost:8000/events -H 'Content-Type: application/json' \
+  -d '{"device_id":"global_mic","kind":"transcript","event_kind":"transcript","payload":{"text":"I need to lock in"}}'
+
+# 7. Check results
+curl localhost:8000/state        # Current home state
+curl localhost:8000/devices      # Registered devices
+curl localhost:8000/events       # Recent event log
+curl localhost:8000/master-log   # Full master reasoning history
+```
+
+### Master Model Config (in `.env`)
+
+```bash
+MASTER_MODEL=claude-sonnet-4-6   # Default. Options: claude-opus-4-6, gpt-oss-120b
+MASTER_PROVIDER=auto             # auto-detects from model name. Options: anthropic, cerebras
+```
+
+### Data Files (gitignored, in `data/`)
+
+- `state.json` — current home state (mode, mood, energy, voice_lock)
+- `devices.json` — registered device info
+- `event_log.jsonl` — all incoming events
+- `master_log.jsonl` — full master reasoning turns (trigger, context, decisions, dispatches, latency)
+
+## What's Not Built Yet
+
+- **Device-side runtimes** — Pi code: WebSocket client, hardware drivers, device agent loop
+- **Voice pipeline** — VAD + Whisper on global mic, transcript packaging
+- **Vision pipeline** — motion-gated frame capture, Claude Vision analysis (hooks exist in app.py)
+- **TTS** — ElevenLabs/Piper integration for Mirror and Radio
+- **Tick scheduler** — periodic tick event generator (currently manual via curl)
+- **Dashboard UI** — live view of system state and master reasoning
+
 ## V1 Stack
 
 - Python 3.11+
 - FastAPI control plane on the laptop
-- Claude Opus 4.6 (1M context, beta header `context-1m-2025-08-07`) as the master model
-- Claude Vision called centrally from the laptop
-- Whisper + VAD on the primary voice device
-- simple device runtimes on Raspberry Pis
+- Claude Sonnet 4.6 as default master model (configurable, supports Cerebras)
+- 1M context beta header `context-1m-2025-08-07`
+- Claude Vision called centrally from the laptop (not yet wired)
+- Whisper + VAD on the primary voice device (not yet built)
+- Simple device runtimes on Raspberry Pis (not yet built)
 
 ## Design Principles
 

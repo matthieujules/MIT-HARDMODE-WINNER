@@ -1,28 +1,30 @@
-# Lamp
+# Lamp / LEM Arm
 
-An expressive desk lamp with an RGB LED and a 4-axis servo head (pan, tilt, roll, body lean). Communicates entirely through light and motion — no speech, no camera, no mic.
+The current Lamp implementation is a 4-joint SO-101 robot arm with a LEMP RGB light mounted at the end effector.
 
-## Sensors
+## Hardware
 
-None.
+- Arm controller: SO-101 motor board over USB serial
+- Joints: `base_yaw`, `shoulder`, `elbow`, `wrist`
+- Light: PWM RGB on three GPIO pins
+- No speech, no camera, no mic
 
-## Actions
+## Config
 
-| Action | Description | Example |
-|--------|-------------|---------|
-| `set_color` | Set LED to an RGB color | `set_color(255, 180, 50)` |
-| `set_brightness` | Set overall brightness (0-100) | `set_brightness(70)` |
-| `set_scene` | Apply a named lighting scene | `set_scene("focus")` |
-| `look_at` | Turn head toward a direction | `look_at(pan=45, tilt=100)` |
-| `nod` | Nod head up and down (yes) | `nod("fast")` |
-| `shake` | Shake head side to side (no) | `shake("normal")` |
-| `emote` | Express emotion via light + motion | `emote("curious")` |
-| `perk_up` | Quick upward motion (surprise/attention) | `perk_up()` |
-| `droop` | Slow downward lean (sad/sleepy) | `droop()` |
-| `reset_position` | Return to neutral position | `reset_position()` |
+[`config.yaml`](/Users/ethrbt/code/MIT-HARDMODE-HACKATHON/devices/lamp/config.yaml) defines:
 
-## Notes
+- GPIO pins for the LEMP RGB channels
+- USB serial settings for the SO-101 controller
+- Joint limits, home angles, servo IDs
+- Arm geometry values so link lengths and offsets can be changed without editing code
+- Named presets for fast poses like `focus`, `relax`, and `alert`
 
-- 4 servo axes: head pan, head tilt, head roll, body lean (PCA9685 I2C).
-- RGB LED on GPIO PWM pins.
-- Scenes available: `focus`, `relax`, `energy`, `dim`, `alert`, `off`.
+## Development Loop
+
+Run the local simulator with:
+
+```bash
+python3 devices/lamp/main.py
+```
+
+This accepts typed instructions from the terminal, resolves them into a structured plan, previews the resulting joint targets and RGB output, and in simulation mode prints the serial payload that would be sent to the SO-101 board.

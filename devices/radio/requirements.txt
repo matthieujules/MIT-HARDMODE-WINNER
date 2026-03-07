@@ -1,0 +1,7 @@
+# Radio device runtime dependencies
+# Install on the Radio Raspberry Pi.
+
+openai>=1.65.0
+PyYAML>=6.0.2
+elevenlabs>=1.13.4
+websockets>=12.0

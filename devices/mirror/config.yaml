@@ -1,15 +1,15 @@
-# Mirror — Primary conversational device
-# Has its OWN camera (face-to-face with user), speaker, tilt servo
-# No mic (global mic is separate)
+# Mirror — Visual display device
+# Has its OWN camera (face-to-face with user), LCD screen, tilt servo
+# No speaker, no mic
 
 device_id: mirror
 device_name: Mirror
 device_type: companion
 
 network:
-  ip: "192.168.1.102"        # UPDATE with actual Pi IP
+  tailscale_hostname: mirror-pi
   ssh_user: pi
-  master_url: "http://192.168.1.10:8000"  # UPDATE with master laptop IP
+  master_url: "http://claude-master:8000"
 
 hardware:
   servos:
@@ -31,23 +31,24 @@ hardware:
     resolution: [640, 480]
     # Mirror's OWN camera — face-to-face with the user
     # Used for mood, appearance, and expression analysis
-    # Frames sent to control plane for Claude Vision
+    # Also used locally to condition image generation for the LCD
 
-  speaker:
+  display:
     enabled: true
-    type: usb                # UPDATE — "usb" or "i2s"
+    type: lcd_hdmi           # UPDATE if using a different LCD connection
+    resolution: [1080, 1920]
 
-  # No mic — global mic handles all voice input
+  # No speaker, no mic
 
 capabilities:
   - see                      # Mirror's own camera (face-to-face)
-  - speak                    # TTS output
+  - display_image            # LCD output for generated visuals
   - move_tilt                # Tilt servo for physical expression
 
 actions:
-  speak:
-    description: "Say something to the user through TTS"
-    params: {message: str}
+  display_image:
+    description: "Generate and show an image on the mirror LCD"
+    params: {instruction: str}
   tilt:
     description: "Tilt the mirror face up or down"
     params: {angle: int}

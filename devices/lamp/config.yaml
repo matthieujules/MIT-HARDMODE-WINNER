@@ -1,78 +1,159 @@
-# Lamp — Expressive lamp with RGB LED and servos
-# No speech, no camera, no mic
-
 device_id: lamp
 device_name: Lamp
-device_type: lamp
+device_type: lem_arm
 
 network:
-  ip: "192.168.1.101"        # UPDATE with actual Pi IP
+  ip: "192.168.1.101"
   ssh_user: pi
-  master_url: "http://192.168.1.10:8000"  # UPDATE with master laptop IP
+  master_url: "http://192.168.1.10:8000"
 
 hardware:
-  led:
+  lemp:
     type: rgb_pwm
     pins:
-      red: 17                # UPDATE with actual GPIO pins
-      green: 27              # UPDATE
-      blue: 22               # UPDATE
-    pwm_frequency: 1000      # Hz
+      red: 17
+      green: 27
+      blue: 22
+    pwm_frequency: 1000
+    default_color:
+      r: 255
+      g: 180
+      b: 120
+    brightness_scale: 1.0
 
-  servos:
-    type: pca9685_i2c
-    i2c_address: 0x40
-    channels:
-      head_pan: 0            # UPDATE — left-right
-      head_tilt: 1           # UPDATE — up-down nod
-      head_roll: 2           # UPDATE — side tilt (curiosity)
-      body_lean: 3           # UPDATE — forward-back lean
-    servo_range:
-      min_pulse: 500         # UPDATE — microseconds
-      max_pulse: 2400
-      min_angle: 0
-      max_angle: 180
-    default_positions:
-      head_pan: 90
-      head_tilt: 90
-      head_roll: 90
-      body_lean: 90
+  arm:
+    type: so101_serial
+    serial:
+      port: "/dev/ttyUSB0"
+      baud_rate: 115200
+      timeout_s: 1.0
+    controller:
+      protocol: jsonl
+      command_topic: "set_joint_angles"
+    joints:
+      base_yaw:
+        servo_id: 1
+        min_angle: 0
+        max_angle: 180
+        home_angle: 90
+        link_angle_offset_deg: 0
+      shoulder:
+        servo_id: 2
+        min_angle: 15
+        max_angle: 165
+        home_angle: 95
+        link_angle_offset_deg: 0
+      elbow:
+        servo_id: 3
+        min_angle: 0
+        max_angle: 170
+        home_angle: 110
+        link_angle_offset_deg: 0
+      wrist:
+        servo_id: 4
+        min_angle: 0
+        max_angle: 180
+        home_angle: 90
+        link_angle_offset_deg: 0
+    geometry:
+      units: mm
+      base_height: 96.0
+      upper_arm_length: 118.0
+      forearm_length: 112.0
+      wrist_to_lemp: 58.0
+      tool_vertical_offset: 0.0
+      shoulder_zero_reference: horizontal_forward
+      elbow_zero_reference: straight_with_shoulder
+      wrist_zero_reference: inline_with_forearm
 
-  # No camera, no mic, no speaker
+presets:
+  home:
+    joints:
+      base_yaw: 90
+      shoulder: 95
+      elbow: 110
+      wrist: 90
+    color:
+      r: 255
+      g: 180
+      b: 120
+    duration_ms: 1000
+  focus:
+    joints:
+      base_yaw: 90
+      shoulder: 78
+      elbow: 122
+      wrist: 82
+    color:
+      r: 90
+      g: 160
+      b: 255
+    duration_ms: 1200
+  relax:
+    joints:
+      base_yaw: 90
+      shoulder: 110
+      elbow: 95
+      wrist: 105
+    color:
+      r: 255
+      g: 150
+      b: 90
+    duration_ms: 1800
+  alert:
+    joints:
+      base_yaw: 90
+      shoulder: 70
+      elbow: 140
+      wrist: 70
+    color:
+      r: 255
+      g: 40
+      b: 40
+    duration_ms: 500
+  curious:
+    joints:
+      base_yaw: 110
+      shoulder: 82
+      elbow: 126
+      wrist: 70
+    color:
+      r: 120
+      g: 255
+      b: 180
+    duration_ms: 900
 
 capabilities:
-  - light                    # RGB LED control
-  - move_head                # Servo pan/tilt/roll/lean
-  - emote                    # Express through light + motion combos
+  - arm
+  - light
+  - emote
 
 actions:
   set_color:
-    description: "Set LED to an RGB color"
-    params: {r: int, g: int, b: int}
+    description: "Set the LEMP RGB light color"
+    params:
+      r: int
+      g: int
+      b: int
   set_brightness:
-    description: "Set overall LED brightness (0-100)"
-    params: {brightness: int}
-  set_scene:
-    description: "Apply a named lighting scene"
-    params: {scene: "focus|relax|energy|dim|alert|off"}
-  look_at:
-    description: "Turn head to look in a direction"
-    params: {pan: int, tilt: int}
-  nod:
-    description: "Nod head up and down (yes)"
-    params: {speed: "slow|normal|fast"}
-  shake:
-    description: "Shake head side to side (no)"
-    params: {speed: "slow|normal|fast"}
+    description: "Set overall light brightness (0.0-1.0)"
+    params:
+      brightness: float
+  set_joint_angles:
+    description: "Set all four SO-101 joint targets"
+    params:
+      base_yaw: float
+      shoulder: float
+      elbow: float
+      wrist: float
+  move_to_preset:
+    description: "Move the arm to a named preset pose"
+    params:
+      preset: "home|focus|relax|alert|curious"
   emote:
-    description: "Express an emotion through combined light + motion"
-    params: {emotion: str}
-  perk_up:
-    description: "Quick upward motion — attention/surprise"
-    params: {}
-  droop:
-    description: "Slow downward lean — sad/sleepy"
-    params: {}
-  reset_position:
-    description: "Return to default neutral position"
+    description: "Express an emotion through arm pose and light together"
+    params:
+      emotion: str
+  reset_pose:
+    description: "Return to the home pose"
     params: {}
