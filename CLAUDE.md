@@ -258,6 +258,10 @@ RADIO_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for radio
 - **Radio dial drifts after process kill** — PCA9685 holds residual PWM. Must explicitly `dial.stop(); dial.detach(); dial.close()` or power cycle to stop.
 - **Radio brain.py responses API returns 400** — falls back to chat.completions API automatically. Not a bug, just OpenAI responses API quirk.
 - **Radio files split across two dirs** — new integration files (ws_client, agent, planner) at `devices/radio/`, hardware files (runtime, audio, dial, config) at `devices/radio/RASPi/`. main.py adds both to sys.path.
+- **Lamp serial port can shift** — `/dev/ttyACM0` may become `/dev/ttyACM1` after reboot or if stale `move.py` processes hold the port. Check `ls /dev/ttyACM*` and update `config.yaml` on Pi if needed. Kill any leftover `move.py` processes before restarting.
+- **Stale processes lock lamp serial bus** — old `move.py` or crashed lamp processes hold `/dev/ttyACM*` open. New lamp process falls back to sim mode ("falling back to sim for arm"). Fix: `pkill -u lamp python3`, wait, restart.
+- **Device processes die silently on Pi** — no supervisor/systemd service. If a device process crashes (OOM, unhandled exception), it stays dead. Check with `pgrep -u <user> python3`. Logs at `/tmp/<device>.log` are overwritten on restart, so crash output is lost.
+- **Mirror process fragile** — mirror can crash from image generation timeouts, pygame display issues, or camera errors. Always check `/tmp/mirror.log` immediately after a crash before restarting (restart overwrites the log).
 
 **Orchestrate, don't implement.** Delegate multi-file work to subagents (Task tool). Your context is for orchestration.
 
