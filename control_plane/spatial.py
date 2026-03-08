@@ -38,8 +38,7 @@ def default_people_from_room(room_config: dict) -> list[dict]:
             continue
         people.append({
             "id": template.get("id", f"person_{index + 1}"),
-            "label": template.get("label", f"Person {index + 1}"),
-            "role": template.get("role", "guest" if index > 0 else "primary"),
+            "label": template.get("label", f"User {index + 1}"),
             "x_cm": x_cm,
             "y_cm": y_cm,
             "source": template.get("source", "room_config"),
@@ -50,9 +49,8 @@ def default_people_from_room(room_config: dict) -> list[dict]:
 
     user_pos = room_config.get("user_default_position", {})
     return [{
-        "id": "sally",
-        "label": user_pos.get("label", "Sally"),
-        "role": "primary",
+        "id": "person_1",
+        "label": user_pos.get("label", "User 1"),
         "x_cm": user_pos.get("x_cm", 250),
         "y_cm": user_pos.get("y_cm", 200),
         "source": "room_config",
@@ -64,7 +62,7 @@ def primary_user_from_people(people: list[dict]) -> dict:
     if not people:
         return {}
 
-    primary = next((person for person in people if person.get("role") == "primary"), people[0])
+    primary = people[0]
     return {
         "x_cm": primary.get("x_cm"),
         "y_cm": primary.get("y_cm"),
@@ -87,9 +85,8 @@ def normalize_spatial_state(spatial: dict | None, room_config: dict) -> dict:
         legacy_user = normalized.get("user")
         if legacy_user and legacy_user.get("x_cm") is not None and legacy_user.get("y_cm") is not None:
             normalized["people"] = [{
-                "id": "sally",
-                "label": legacy_user.get("label", "Sally"),
-                "role": "primary",
+                "id": "person_1",
+                "label": legacy_user.get("label", "User 1"),
                 "x_cm": legacy_user.get("x_cm"),
                 "y_cm": legacy_user.get("y_cm"),
                 "source": legacy_user.get("source", "legacy_user"),
@@ -169,36 +166,25 @@ def merge_people_observations(previous_people: list[dict], observations: list[di
         unmatched_prev.remove(prev_index)
         unmatched_candidates.remove(candidate_index)
 
-    templates = room_config.get("people_templates") or default_people_from_room(room_config)
-    used_ids = {person.get("id") for person in results}
-
     for candidate_index in sorted(unmatched_candidates):
         candidate = candidates[candidate_index]
-        template = next((item for item in templates if item.get("id") not in used_ids), None)
-
-        if template:
-            person = {
-                "id": template.get("id"),
-                "label": template.get("label", "Guest"),
-                "role": template.get("role", "guest"),
-                **candidate,
-            }
-        else:
-            guest_count = 1 + sum(
-                1 for person in results
-                if str(person.get("id", "")).startswith("guest_")
-            )
-            person = {
-                "id": f"guest_{guest_count}",
-                "label": f"Guest {guest_count}",
-                "role": "guest",
-                **candidate,
-            }
-
-        used_ids.add(person["id"])
+        used_numbers = {
+            int(str(person.get("id", "person_0")).split("_")[-1])
+            for person in results
+            if str(person.get("id", "")).startswith("person_")
+            and str(person.get("id", "")).split("_")[-1].isdigit()
+        }
+        next_number = 1
+        while next_number in used_numbers:
+            next_number += 1
+        person = {
+            "id": f"person_{next_number}",
+            "label": f"User {next_number}",
+            **candidate,
+        }
         results.append(person)
 
-    results.sort(key=lambda person: (0 if person.get("role") == "primary" else 1, person.get("id", "")))
+    results.sort(key=lambda person: person.get("id", "person_999"))
     return results
 
 

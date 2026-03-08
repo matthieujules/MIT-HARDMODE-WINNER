@@ -7,10 +7,13 @@ let _seenIds = new Set();
 let _feedItems = [];
 let _deviceActivity = {};
 let _latestReasoning = null;
+let _latestBrainTriggerAt = null;
 
 const MAX_FEED_ITEMS = 40;
 const MAX_DEBUG_LINES = 12;
 const QUIET_EVENT_KINDS = new Set(['heartbeat']);
+const BRAIN_TRIGGER_KINDS = new Set(['transcript', 'vision_result', 'tick', 'frame']);
+const BRAIN_PENDING_WINDOW_MS = 30000;
 
 export function initTimeline(containerElement) {
   _container = containerElement || null;
@@ -18,6 +21,7 @@ export function initTimeline(containerElement) {
   _feedItems = [];
   _deviceActivity = {};
   _latestReasoning = null;
+  _latestBrainTriggerAt = null;
 
   if (_container) {
     _container.innerHTML = '';
@@ -61,6 +65,10 @@ export function updateTimeline(events, masterLog, pendingDeterministic) {
 
     _applyDeviceActivity(entry);
 
+    if (_isBrainTrigger(entry)) {
+      _latestBrainTriggerAt = entry.timestamp;
+    }
+
     if (entry.type === 'reasoning') {
       _latestReasoning = {
         timestamp: entry.timestamp,
@@ -82,7 +90,10 @@ export function updateTimeline(events, masterLog, pendingDeterministic) {
     feedItems: tickerItems,
     tickerText: tickerItems.map((item) => item.text).join('   ✦   '),
     brain: _latestReasoning ? { ..._latestReasoning } : null,
+    brainPending: _isBrainPending(),
+    brainPendingAt: _latestBrainTriggerAt,
     deviceActivity: _cloneDeviceActivity(),
+    deviceLogs: _buildDeviceLogs(),
   };
 }
 
@@ -90,9 +101,10 @@ function _processEvent(event, pendingDeterministic) {
   if (!event) return null;
 
   const kind = event.kind || event.event_kind || 'unknown';
+  const timestamp = event.timestamp || event.ts || event.created_at || null;
   const base = {
-    id: `evt_${event.timestamp}_${event.device_id}_${kind}_${_stableSuffix(event.payload)}`,
-    timestamp: event.timestamp,
+    id: `evt_${timestamp}_${event.device_id}_${kind}_${_stableSuffix(event.payload)}`,
+    timestamp,
     device: event.device_id,
     kind,
     payload: event.payload || {},
@@ -133,6 +145,7 @@ function _processEvent(event, pendingDeterministic) {
 
 function _processMasterLog(entry) {
   if (!entry) return [];
+  if (entry.outcome === 'error') return [];
 
   const items = [];
   const toolCalls = entry.tool_calls || [];
@@ -183,7 +196,12 @@ function _toFeedItem(entry) {
         id: entry.id,
         timestamp: entry.timestamp,
         device: entry.deterministicDevice,
-        text: `[${time}] ROUTER → ${_upper(entry.deterministicDevice)}.${entry.deterministicAction || 'dispatch'} :: ${_truncate(entry.payload && entry.payload.text, 72)}`,
+        text: `[${time}] ${_jsonCompact({
+          from: 'router',
+          to: entry.deterministicDevice,
+          action: entry.deterministicAction || 'dispatch',
+          transcript: entry.payload && entry.payload.text,
+        })}`,
       };
 
     case 'result':
@@ -191,7 +209,12 @@ function _toFeedItem(entry) {
         id: entry.id,
         timestamp: entry.timestamp,
         device: entry.device,
-        text: `[${time}] ${_upper(entry.device)} RESULT :: ${_truncate(entry.output || entry.status || 'ok', 84)}`,
+        text: `[${time}] ${_jsonCompact({
+          from: entry.device,
+          type: 'action_result',
+          status: entry.status || 'ok',
+          output: entry.output || '',
+        })}`,
       };
 
     case 'out':
@@ -199,21 +222,30 @@ function _toFeedItem(entry) {
         id: entry.id,
         timestamp: entry.timestamp,
         device: entry.device,
-        text: `[${time}] BRAIN ⇢ ${_upper(entry.device)} :: ${_truncate(entry.instruction || 'dispatch', 92)}`,
+        text: `[${time}] ${_jsonCompact({
+          from: 'brain',
+          to: entry.device,
+          tool: `send_to_${entry.device}`,
+          input: { instruction: entry.instruction || 'dispatch' },
+        })}`,
       };
 
     case 'reasoning':
       return {
         id: entry.id,
         timestamp: entry.timestamp,
-        text: `[${time}] BRAIN ${entry.model || 'master'} ${entry.latency || '?'}ms :: ${_truncate(entry.summary || 'reasoning', 90)}`,
+        text: `[${time}] ${_jsonCompact({
+          from: entry.model || 'master',
+          latency_ms: entry.latency || '?',
+          summary: entry.summary || 'reasoning',
+        })}`,
       };
 
     case 'system':
       return {
         id: entry.id,
         timestamp: entry.timestamp,
-        text: `[${time}] SYSTEM :: tick`,
+        text: `[${time}] ${_jsonCompact({ from: 'system', type: 'tick' })}`,
       };
 
     case 'in': {
@@ -222,7 +254,11 @@ function _toFeedItem(entry) {
           id: entry.id,
           timestamp: entry.timestamp,
           device: entry.device,
-          text: `[${time}] MIC :: ${_truncate(entry.payload && entry.payload.text, 86)}`,
+          text: `[${time}] ${_jsonCompact({
+            from: entry.device || 'global_mic',
+            type: 'transcript',
+            payload: entry.payload || {},
+          })}`,
         };
       }
 
@@ -230,7 +266,11 @@ function _toFeedItem(entry) {
         id: entry.id,
         timestamp: entry.timestamp,
         device: entry.device,
-        text: `[${time}] ${_upper(entry.device)} ${entry.kind} :: ${_truncate(_payloadSummary(entry.kind, entry.payload), 86)}`,
+        text: `[${time}] ${_jsonCompact({
+          from: entry.device,
+          type: entry.kind,
+          payload: entry.payload || {},
+        })}`,
       };
     }
 
@@ -304,6 +344,42 @@ function _cloneDeviceActivity() {
   return copy;
 }
 
+function _buildDeviceLogs() {
+  const grouped = {};
+  const MAX_DEVICE_LOGS = 12;
+
+  for (const item of _feedItems) {
+    if (!item.device) continue;
+    grouped[item.device] = grouped[item.device] || [];
+    grouped[item.device].push({
+      id: item.id,
+      timestamp: item.timestamp,
+      text: item.text,
+    });
+    if (grouped[item.device].length > MAX_DEVICE_LOGS) {
+      grouped[item.device].shift();
+    }
+  }
+
+  return grouped;
+}
+
+function _isBrainTrigger(entry) {
+  if (!entry) return false;
+  if (entry.type === 'system') return true;
+  return entry.type === 'in' && BRAIN_TRIGGER_KINDS.has(entry.kind);
+}
+
+function _isBrainPending() {
+  const triggerMs = _toMs(_latestBrainTriggerAt);
+  if (!triggerMs) return false;
+
+  const reasoningMs = _toMs(_latestReasoning && _latestReasoning.timestamp);
+  if (reasoningMs && reasoningMs >= triggerMs) return false;
+
+  return (Date.now() - triggerMs) < BRAIN_PENDING_WINDOW_MS;
+}
+
 function _payloadSummary(kind, payload) {
   if (!payload) return '';
   if (kind === 'transcript') return payload.text || '';
@@ -349,6 +425,14 @@ function _truncate(value, maxLen) {
   const str = typeof value === 'string' ? value : (value == null ? '' : String(value));
   if (str.length <= maxLen) return str;
   return `${str.slice(0, maxLen)}…`;
+}
+
+function _jsonCompact(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function _upper(value) {

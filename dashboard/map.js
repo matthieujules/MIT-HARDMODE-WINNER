@@ -29,6 +29,7 @@ let _gTooltip = null;
 // HTML overlay layers
 let _overlayRoot = null;
 let _brainHud = null;
+let _brainWindow = null;
 let _brainSummary = null;
 let _brainHudMeta = null;
 let _brainTerminalViewport = null;
@@ -42,17 +43,18 @@ let _brainScrollFrame = null;
 const _deviceGroups = {};
 const _devicePanels = {};
 
-const DEVICE_PANEL_WIDTH = 220;
-const DEVICE_PANEL_HEIGHT = 112;
-const ACTIVE_WINDOW_MS = 7000;
+const DEVICE_PANEL_WIDTH = 390;
+const DEVICE_PANEL_HEIGHT = 220;
+const ACTIVE_WINDOW_MS = 9000;
+const BEAM_DURATION_MS = 1800;
 const KNOWN_DEVICE_IDS = ['lamp', 'mirror', 'radio', 'rover'];
 const MAP_TOP_GUTTER_PX = 150;
 
 const DEVICE_PANEL_SLOTS = {
-  lamp:   { left: 94,  bottom: 118 },
-  rover:  { left: 36,  top: 178 },
-  mirror: { right: 192, top: 178 },
-  radio:  { right: 30, top: 282 },
+  rover:  { left: 18,  top: 190 },
+  mirror: { right: 18, top: 190 },
+  lamp:   { left: 18,  bottom: 54 },
+  radio:  { right: 18, bottom: 54 },
 };
 
 // Pulse dedup
@@ -88,10 +90,7 @@ const DEVICE_COLORS = {
   rover: '#22c55e',
 };
 
-const PERSON_COLORS = {
-  primary: '#f472b6',
-  guest: '#e2e8f0',
-};
+const PERSON_COLORS = ['#f472b6', '#e2e8f0', '#60a5fa', '#fbbf24'];
 
 // Device status from last update
 let _lastSpatial = null;
@@ -375,7 +374,6 @@ function _createOverlayUI() {
   _brainHud = document.createElement('div');
   _brainHud.className = 'brain-hud';
   _brainHud.innerHTML = [
-    '<div class="brain-hud__eyebrow">CONTROL PLANE</div>',
     '<div class="brain-hud__window">',
       '<div class="brain-hud__chrome">',
         '<span class="brain-hud__dots" aria-hidden="true">',
@@ -396,6 +394,7 @@ function _createOverlayUI() {
   ].join('');
 
   _brainSummary = _brainHud.querySelector('.brain-hud__summary');
+  _brainWindow = _brainHud.querySelector('.brain-hud__window');
   _brainHudMeta = _brainHud.querySelector('.brain-hud__meta');
   _brainTerminalViewport = _brainHud.querySelector('.brain-hud__terminal');
   _brainTerminalLines = _brainHud.querySelector('.brain-hud__lines');
@@ -415,7 +414,7 @@ function _positionBrainHud() {
 
   const rect = _container.getBoundingClientRect();
   _brainHud.style.left = `${Math.round(rect.width / 2)}px`;
-  _brainHud.style.top = '72px';
+  _brainHud.style.top = '46px';
 }
 
 function _updateBrainOverlay(overlayData = {}) {
@@ -467,6 +466,20 @@ function _updateBrainOverlay(overlayData = {}) {
     _brainSummary.textContent = 'MASTER · awaiting reasoning';
     _brainHudMeta.textContent = 'LIVE';
   }
+
+  const brainActive = _isBrainRecentlyActive(overlayData.brain);
+  const brainPending = Boolean(overlayData.brainPending);
+  const showBrainActive = brainPending || brainActive || _activePulses.length > 0;
+  _brainHud.classList.toggle('brain-hud--active', showBrainActive);
+  _brainHud.classList.toggle('brain-hud--pending', brainPending);
+  if (_brainWindow) {
+    _brainWindow.classList.toggle('brain-hud__window--active', showBrainActive);
+    _brainWindow.classList.toggle('brain-hud__window--pending', brainPending);
+  }
+  if (_gBrain) {
+    _gBrain.classList.toggle('layer-brain--active', showBrainActive);
+    _gBrain.classList.toggle('layer-brain--pending', brainPending);
+  }
 }
 
 function _animateBrainTerminalScroll(newItems) {
@@ -515,17 +528,21 @@ function _getOrCreateDevicePanel(deviceId) {
   root.setAttribute('data-device-id', deviceId);
   root.style.setProperty('--device-accent', DEVICE_COLORS[deviceId] || '#e2e8f0');
   root.innerHTML = [
-    '<div class="device-panel__header">',
-      `<span class="device-panel__name">${_escapeHTML(deviceId.toUpperCase())}</span>`,
-      '<span class="device-panel__status">IDLE</span>',
-    '</div>',
-    '<div class="device-panel__row">',
-      '<span class="device-panel__label">IN</span>',
-      '<span class="device-panel__value device-panel__value--instruction">Awaiting instruction</span>',
-    '</div>',
-    '<div class="device-panel__row">',
-      '<span class="device-panel__label">OUT</span>',
-      '<span class="device-panel__value device-panel__value--output">No output yet</span>',
+    '<div class="device-panel__window">',
+      '<div class="device-panel__chrome">',
+        '<span class="device-panel__dots" aria-hidden="true">',
+          '<span class="device-panel__dot"></span>',
+          '<span class="device-panel__dot"></span>',
+          '<span class="device-panel__dot"></span>',
+        '</span>',
+        `<span class="device-panel__name">${_escapeHTML(deviceId.toUpperCase())}</span>`,
+        '<span class="device-panel__status">IDLE</span>',
+      '</div>',
+      '<div class="device-panel__terminal">',
+        '<div class="device-panel__lines">',
+          '<div class="device-panel__line device-panel__line--placeholder">$ waiting for device logs…</div>',
+        '</div>',
+      '</div>',
     '</div>',
   ].join('');
 
@@ -534,14 +551,15 @@ function _getOrCreateDevicePanel(deviceId) {
   _devicePanels[deviceId] = {
     root,
     status: root.querySelector('.device-panel__status'),
-    instruction: root.querySelector('.device-panel__value--instruction'),
-    output: root.querySelector('.device-panel__value--output'),
+    terminal: root.querySelector('.device-panel__terminal'),
+    lines: root.querySelector('.device-panel__lines'),
+    lineIds: [],
   };
 
   return _devicePanels[deviceId];
 }
 
-function _updateDevicePanel(deviceId, x, y, status, activity = {}) {
+function _updateDevicePanel(deviceId, x, y, status, activity = {}, logs = []) {
   const panel = _getOrCreateDevicePanel(deviceId);
   const rect = _container.getBoundingClientRect();
   const panelWidth = panel.root.offsetWidth || DEVICE_PANEL_WIDTH;
@@ -568,11 +586,29 @@ function _updateDevicePanel(deviceId, x, y, status, activity = {}) {
   panel.root.style.left = `${Math.round(left)}px`;
   panel.root.style.top = `${Math.round(top)}px`;
   panel.status.textContent = String(status || 'idle').toUpperCase();
-  panel.instruction.textContent = _truncateText(activity.instruction || 'Awaiting instruction', 92);
-  panel.output.textContent = _truncateText(activity.output || activity.dispatch || 'No output yet', 92);
+  const renderedLogs = Array.isArray(logs) ? logs : [];
+  const lineIds = renderedLogs.map((entry) => entry.id);
+  const logsChanged = lineIds.join('|') !== panel.lineIds.join('|');
+  panel.lines.innerHTML = renderedLogs.length > 0
+    ? renderedLogs.map((entry) => (
+        `<div class="device-panel__line"><span class="device-panel__prompt">&gt;</span>${_escapeHTML(entry.text)}</div>`
+      )).join('')
+    : '<div class="device-panel__line device-panel__line--placeholder">$ waiting for device logs…</div>';
+  panel.lineIds = lineIds;
+
+  if (logsChanged && panel.terminal) {
+    requestAnimationFrame(() => {
+      panel.terminal.scrollTop = panel.terminal.scrollHeight;
+    });
+  }
 
   panel.root.classList.toggle('device-panel--active', _isRecentlyActive(status, activity));
   panel.root.classList.toggle('device-panel--offline', status === 'offline');
+}
+
+function _isBrainRecentlyActive(brain) {
+  const timestamp = _timestampMs(brain && brain.timestamp);
+  return timestamp > 0 && (Date.now() - timestamp) < ACTIVE_WINDOW_MS;
 }
 
 function _isRecentlyActive(status, activity) {
@@ -1036,7 +1072,7 @@ function _collectRenderableDevices(spatial, devicesData) {
 
 // ── Update from polling data ────────────────────────────────────────
 
-export function updateMap(stateData, devicesData, recentDispatches, overlayData = {}) {
+export function updateMap(stateData, devicesData, recentDispatches, overlayData = {}, recentResults = []) {
   if (!_initialized) return;
 
   _lastDevicesData = devicesData;
@@ -1105,6 +1141,7 @@ export function updateMap(stateData, devicesData, recentDispatches, overlayData 
         deviceId === 'rover' && _roverAnimating ? _roverCurrentPos.y : y,
         status,
         (_lastOverlayData.deviceActivity && _lastOverlayData.deviceActivity[deviceId]) || {},
+        (_lastOverlayData.deviceLogs && _lastOverlayData.deviceLogs[deviceId]) || [],
       );
 
       // Update cursor for draggable devices
@@ -1118,9 +1155,8 @@ export function updateMap(stateData, devicesData, recentDispatches, overlayData 
     _drawPeople(spatial.people);
   } else if (spatial && spatial.user) {
     _drawPeople([{
-      id: 'sally',
-      label: spatial.user.label || 'Sally',
-      role: 'primary',
+      id: 'person_1',
+      label: spatial.user.label || 'User 1',
       x_cm: spatial.user.x_cm,
       y_cm: spatial.user.y_cm,
     }]);
@@ -1128,9 +1164,8 @@ export function updateMap(stateData, devicesData, recentDispatches, overlayData 
     _drawPeople(_roomConfig.people_default_positions);
   } else if (_roomConfig && _roomConfig.user_default_position) {
     _drawPeople([{
-      id: 'sally',
-      label: _roomConfig.user_default_position.label || 'Sally',
-      role: 'primary',
+      id: 'person_1',
+      label: _roomConfig.user_default_position.label || 'User 1',
       x_cm: _roomConfig.user_default_position.x_cm,
       y_cm: _roomConfig.user_default_position.y_cm,
     }]);
@@ -1139,6 +1174,10 @@ export function updateMap(stateData, devicesData, recentDispatches, overlayData 
   // Handle command pulses
   if (Array.isArray(recentDispatches)) {
     _processDispatches(recentDispatches);
+  }
+
+  if (Array.isArray(recentResults)) {
+    _processActionResults(recentResults);
   }
 
   _updateBrainOverlay(_lastOverlayData);
@@ -1186,19 +1225,21 @@ function _updateDeviceStatus(deviceId, status, devEl) {
 const _personGroups = {};
 
 function _personColor(person) {
-  return person.role === 'primary' ? PERSON_COLORS.primary : PERSON_COLORS.guest;
+  const suffix = String(person.id || 'person_1').split('_').pop();
+  const index = Number.parseInt(suffix, 10);
+  return PERSON_COLORS[Number.isFinite(index) ? (Math.max(index, 1) - 1) % PERSON_COLORS.length : 0];
 }
 
 function _getOrCreatePersonGroup(person) {
   if (_personGroups[person.id]) return _personGroups[person.id];
 
   const color = _personColor(person);
-  const group = svgEl('g', { class: `user-marker user-marker--${person.role || 'guest'}` });
+  const group = svgEl('g', { class: 'user-marker' });
 
   const halo = svgEl('circle', {
     cx: 0, cy: 0, r: 9,
     fill: color,
-    opacity: person.role === 'primary' ? '0.08' : '0.05',
+    opacity: '0.08',
   });
   group.appendChild(halo);
 
@@ -1377,7 +1418,7 @@ function _processDispatches(dispatches) {
       ? dispatch.timestamp
       : new Date(dispatch.timestamp).getTime();
 
-    if (now - dispatchTime > 3000) continue;
+    if (now - dispatchTime > 6000) continue;
 
     // Find target device position
     const devEl = _deviceGroups[dispatch.device];
@@ -1433,7 +1474,8 @@ function _processDispatches(dispatches) {
       startX: centerX, startY: centerY,
       targetX, targetY,
       startTime: performance.now(),
-      duration: 800,
+      duration: BEAM_DURATION_MS,
+      direction: 'outbound',
       color,
     });
 
@@ -1441,6 +1483,84 @@ function _processDispatches(dispatches) {
   }
 
   // Prevent unbounded growth
+  if (_pulsedIds.size > 500) _pulsedIds.clear();
+}
+
+function _processActionResults(results) {
+  const now = Date.now();
+  const origin = _brainOrigin();
+  const centerX = origin.x;
+  const centerY = origin.y;
+
+  for (const result of results) {
+    const pulseId = `result-${result.device}-${result.timestamp}-${result.payload && result.payload.request_id}`;
+    if (_pulsedIds.has(pulseId)) continue;
+
+    const resultTime = typeof result.timestamp === 'number'
+      ? result.timestamp
+      : new Date(result.timestamp).getTime();
+
+    if (now - resultTime > 6000) continue;
+
+    const devEl = _deviceGroups[result.device];
+    if (!devEl) continue;
+
+    const transform = devEl.group.getAttribute('transform') || '';
+    const match = transform.match(/translate\(([\d.]+),\s*([\d.]+)\)/);
+    if (!match) continue;
+
+    const startX = parseFloat(match[1]);
+    const startY = parseFloat(match[2]);
+    const color = DEVICE_COLORS[result.device] || '#e2e8f0';
+
+    _pulsedIds.add(pulseId);
+
+    const pulse = svgEl('circle', {
+      cx: startX, cy: startY, r: 3,
+      fill: color,
+      opacity: '0.95',
+      filter: 'url(#glow-cmd)',
+    });
+    _gPulses.appendChild(pulse);
+
+    const ring = svgEl('circle', {
+      cx: startX, cy: startY, r: 5,
+      fill: 'none',
+      stroke: color,
+      'stroke-width': '1',
+      opacity: '0.55',
+    });
+    _gPulses.appendChild(ring);
+
+    const beam = svgEl('line', {
+      x1: startX,
+      y1: startY,
+      x2: centerX,
+      y2: centerY,
+      stroke: color,
+      'stroke-width': '1.2',
+      opacity: '0.8',
+      'stroke-dasharray': '8 7',
+      class: 'command-beam command-beam--return',
+    });
+    _gPulses.appendChild(beam);
+
+    _activePulses.push({
+      dot: pulse,
+      ring,
+      beam,
+      deviceId: result.device,
+      startX,
+      startY,
+      targetX: centerX,
+      targetY: centerY,
+      startTime: performance.now(),
+      duration: BEAM_DURATION_MS,
+      direction: 'return',
+      color,
+    });
+  }
+
   if (_pulsedIds.size > 500) _pulsedIds.clear();
 }
 
@@ -1662,6 +1782,7 @@ function _animationLoop(timestamp) {
       cy,
       _lastDeviceStatuses.rover || 'executing',
       (_lastOverlayData && _lastOverlayData.deviceActivity && _lastOverlayData.deviceActivity.rover) || {},
+      (_lastOverlayData && _lastOverlayData.deviceLogs && _lastOverlayData.deviceLogs.rover) || [],
     );
 
     // Update path line start to current pos

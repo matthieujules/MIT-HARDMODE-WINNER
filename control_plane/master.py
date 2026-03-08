@@ -76,7 +76,7 @@ MASTER_TOOLS = [
     },
     {
         "name": "send_to_mirror",
-        "description": "Send a natural language instruction to Mirror. Mirror is the primary conversational companion with a camera, speaker, and tilt servo. Use for spoken responses and face-to-face interaction.",
+        "description": "Send a natural language instruction to Mirror. Mirror is a smart picture frame with a camera and display. It sees the room and can generate/display images. No speaker, no speech, no movement.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -252,7 +252,7 @@ def assemble_prompt(state_manager: StateManager, triggering_event: DeviceEvent) 
             spatial_lines.append("People:")
             for person in people:
                 spatial_lines.append(
-                    f"  {person.get('id','person')} ({person.get('role','guest')}): "
+                    f"  {person.get('id','person')}: "
                     f"({person.get('x_cm')},{person.get('y_cm')}) {person.get('label','')}"
                 )
         else:
@@ -511,7 +511,12 @@ def execute_master_turn(state_manager: StateManager, event: DeviceEvent) -> dict
 
     # Call master model with timing
     t0 = time.time()
-    response = call_master(prompt)
+    try:
+        response = call_master(prompt)
+    except Exception as e:
+        latency_ms = round((time.time() - t0) * 1000)
+        logger.error("Master API call failed after %dms: %s: %s", latency_ms, type(e).__name__, e)
+        raise
     latency_ms = round((time.time() - t0) * 1000)
 
     # Parse and validate

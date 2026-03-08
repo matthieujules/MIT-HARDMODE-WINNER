@@ -47,6 +47,7 @@
     let lastStateData = null;
     let lastDevicesData = null;
     let lastRecentDispatches = [];
+    let lastRecentResults = [];
     let lastOverlayData = null;
 
     // ── Polling loop ──────────────────────────────────────────────
@@ -72,9 +73,10 @@
         lastStateData = stateData;
         lastDevicesData = devicesData;
         lastRecentDispatches = _recentDispatches(masterData);
+        lastRecentResults = _recentResults(eventsData);
 
         try {
-          updateMap(lastStateData, lastDevicesData, lastRecentDispatches, lastOverlayData);
+          updateMap(lastStateData, lastDevicesData, lastRecentDispatches, lastOverlayData, lastRecentResults);
         } catch (e) {
           // map updates are non-critical
         }
@@ -90,7 +92,7 @@
         const spatialRes = await fetch('/spatial');
         const spatialData = await spatialRes.json();
         lastStateData = { ...lastStateData, spatial: spatialData };
-        updateMap(lastStateData, lastDevicesData, lastRecentDispatches, lastOverlayData);
+        updateMap(lastStateData, lastDevicesData, lastRecentDispatches, lastOverlayData, lastRecentResults);
       } catch (e) {
         console.warn('Spatial poll failed:', e);
       }
@@ -107,6 +109,22 @@
         }
       }
       return dispatches;
+    }
+
+    function _recentResults(events) {
+      const results = [];
+      const cutoff = Date.now() - 6000;
+      for (const event of events || []) {
+        const timestamp = event.timestamp || event.ts;
+        if (!timestamp || event.kind !== 'action_result') continue;
+        if (new Date(timestamp).getTime() <= cutoff) continue;
+        results.push({
+          device: event.device_id,
+          timestamp,
+          payload: event.payload || {},
+        });
+      }
+      return results;
     }
 
     // Initial poll + interval

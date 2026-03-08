@@ -358,7 +358,7 @@ _active_vision_task: asyncio.Task | None = None
 _active_master_task: asyncio.Task | None = None
 
 # Devices that trigger voice lock when receiving spawn instructions
-_SPEAKING_DEVICES = {"mirror", "radio"}
+_SPEAKING_DEVICES = {"radio"}
 
 
 async def _run_master_reasoning(event: DeviceEvent) -> dict:
@@ -581,7 +581,7 @@ async def get_devices():
 
 @app.get("/events")
 async def get_events():
-    return state_manager.read_recent_events()
+    return state_manager.read_recent_events(max_chars=50000)
 
 
 @app.get("/master-log")
@@ -632,8 +632,11 @@ async def spatial_observe(body: dict):
       {"people": [{"id": "sally", "label": "Sally", "role": "primary", "x_cm": N, "y_cm": N}]}
     """
     if isinstance(body.get("people"), list):
-        state_manager.update_spatial_people(body["people"])
-        return {"status": "ok", "people_tracked": len(body["people"])}
+        room_config = state_manager.read_room_config()
+        previous_people = state_manager.read_state().get("spatial", {}).get("people", [])
+        tracked_people = merge_people_observations(previous_people, body["people"], room_config)
+        state_manager.update_spatial_people(tracked_people)
+        return {"status": "ok", "people_tracked": len(tracked_people)}
 
     device_id = body.get("device_id")
     if not device_id:
