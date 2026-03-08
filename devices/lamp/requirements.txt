@@ -1,0 +1,9 @@
+# Lamp device runtime dependencies
+# Install on the Lamp Raspberry Pi.
+
+openai>=1.65.0
+PyYAML>=6.0.2
+gpiozero>=2.0
+pytweening>=1.2.0
+websockets>=12.0
+lerobot[feetech]>=0.4.4
