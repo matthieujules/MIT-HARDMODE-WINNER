@@ -1,5 +1,5 @@
-# Rover — Small mobile coaster that pulls a basket
-# Motors + encoders. No camera, no mic. Buzzer TBD.
+# Rover — Small mobile coaster with differential drive
+# L298N motor board + quadrature encoders. No camera, no mic, no speaker.
 
 device_id: rover
 device_name: Rover
@@ -7,46 +7,53 @@ device_type: mobile_coaster
 
 network:
   tailscale_hostname: rover-pi
-  ssh_user: pi
+  ssh_user: rover
   master_url: "http://claude-master:8000"
 
 hardware:
   motors:
-    type: pwm_motor_board    # UPDATE — mecanum or differential drive TBD
+    type: l298n_differential
     channels:
-      left:
-        pwm_pin: 12          # UPDATE with actual pin assignments
-        dir_pin_a: 5         # UPDATE
-        dir_pin_b: 6         # UPDATE
       right:
-        pwm_pin: 13          # UPDATE
-        dir_pin_a: 16        # UPDATE
-        dir_pin_b: 20        # UPDATE
+        in1: 23                  # Right motor forward
+        in2: 24                  # Right motor reverse
+      left:
+        in3: 16                  # Left motor forward
+        in4: 25                  # Left motor reverse
     pwm_frequency: 1000
+    gpio_chip: 4                 # Pi 5 = 4, Pi 4 = 0
 
   encoders:
-    type: quadrature_gpio    # UPDATE — encoder type TBD
+    type: quadrature_gpio
     channels:
-      left: {a: 4, b: 14}   # UPDATE
-      right: {a: 15, b: 17}  # UPDATE
-    ticks_per_revolution: 360  # UPDATE with actual encoder spec
+      left: {a: 17, b: 27}
+      right: {a: 22, b: 10}
+    signals_per_rev: 150
+    quad_multiplier: 4
+
+  wheel:
+    diameter_cm: 6.8
+    wheelbase_cm: 19.2
 
   buzzer:
-    enabled: false           # TBD — may add a small buzzer
-    pin: null                # UPDATE if buzzer is added
+    enabled: false
+    pin: null
 
   # No camera, no mic, no speaker
 
 capabilities:
-  - drive                    # Mobile base
+  - drive
 
 actions:
-  drive_to:
-    description: "Drive toward a target location or direction"
-    params: {direction: str, speed: int, duration_ms: int}
+  move:
+    description: "Move forward or backward by centimeters"
+    params: {distance_cm: float, speed: int}
+  rotate:
+    description: "Rotate in place by degrees"
+    params: {degrees: float, speed: int}
   stop:
     description: "Stop all motors immediately"
     params: {}
-  return_home:
-    description: "Drive back to home/starting position"
-    params: {}
+  emote:
+    description: "Express an emotion through movement"
+    params: {emotion: str}

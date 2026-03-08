@@ -1,30 +1,17 @@
 # Mirror — Visual display device
-# Has its OWN camera (face-to-face with user), LCD screen, tilt servo
-# No speaker, no mic
+# Has its OWN camera (face-to-face with user) and an LCD screen.
+# No servo, no speaker, no mic.
 
 device_id: mirror
 device_name: Mirror
 device_type: companion
 
 network:
-  tailscale_hostname: mirror-pi
+  ip: "mirror-pi"
   ssh_user: pi
   master_url: "http://claude-master:8000"
 
 hardware:
-  servos:
-    type: pca9685_i2c
-    i2c_address: 0x40
-    channels:
-      tilt: 0                # UPDATE — single servo, tilt the mirror face
-    servo_range:
-      min_pulse: 500         # UPDATE
-      max_pulse: 2400
-      min_angle: 0
-      max_angle: 180
-    default_positions:
-      tilt: 90
-
   camera:
     type: usb
     device: "/dev/video0"    # UPDATE if needed
@@ -38,26 +25,13 @@ hardware:
     type: lcd_hdmi           # UPDATE if using a different LCD connection
     resolution: [1080, 1920]
 
-  # No speaker, no mic
+  # No servo, no speaker, no mic
 
 capabilities:
   - see                      # Mirror's own camera (face-to-face)
   - display_image            # LCD output for generated visuals
-  - move_tilt                # Tilt servo for physical expression
 
 actions:
   display_image:
     description: "Generate and show an image on the mirror LCD"
     params: {instruction: str}
-  tilt:
-    description: "Tilt the mirror face up or down"
-    params: {angle: int}
-  nod:
-    description: "Nod the mirror (agreement)"
-    params: {speed: "slow|normal|fast"}
-  look_up:
-    description: "Tilt up to face the user"
-    params: {}
-  look_down:
-    description: "Tilt down (shy/thinking)"
-    params: {}

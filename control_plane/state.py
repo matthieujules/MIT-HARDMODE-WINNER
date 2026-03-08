@@ -92,15 +92,24 @@ class StateManager:
 
     def update_spatial_people(self, people: list[dict]) -> None:
         """Replace tracked people positions and keep legacy user alias in sync."""
+        normalized = []
+        for index, person in enumerate(people):
+            if person.get("x_cm") is None or person.get("y_cm") is None:
+                continue
+            normalized_person = dict(person)
+            normalized_person.setdefault("id", f"person_{index + 1}")
+            normalized_person.setdefault("label", f"User {index + 1}")
+            normalized.append(normalized_person)
+
         with self._lock:
             state = json.loads(self._state_path.read_text())
             spatial = state.get("spatial", {})
-            spatial["people"] = people
-            spatial["user"] = primary_user_from_people(people)
+            spatial["people"] = normalized
+            spatial["user"] = primary_user_from_people(normalized)
             state["spatial"] = spatial
-            state["people_count"] = len(people)
+            state["people_count"] = len(normalized)
             self._state_path.write_text(json.dumps(state, default=str))
-        logger.info("Spatial people updated: %d tracked", len(people))
+        logger.info("Spatial people updated: %d tracked", len(normalized))
 
     # ── Devices (devices.json) ─────────────────────────────────────
 
@@ -168,16 +177,22 @@ class StateManager:
                 f.write(json.dumps(event.model_dump(mode="json"), default=str) + "\n")
         logger.debug("Event logged: %s/%s", event.device_id, event.kind)
 
-    def read_recent_events(self, max_chars: int = 8000) -> list[dict]:
+    def read_recent_events(self, max_chars: int = 8000, include_heartbeats: bool = False) -> list[dict]:
         if not self._event_log_path.exists():
             return []
         lines = self._event_log_path.read_text().strip().splitlines()
         result: list[dict] = []
         total_chars = 0
         for line in reversed(lines):
+            try:
+                parsed = json.loads(line)
+            except Exception:
+                continue
+            if not include_heartbeats and parsed.get("kind") == "heartbeat":
+                continue
             if total_chars + len(line) > max_chars:
                 break
-            result.append(json.loads(line))
+            result.append(parsed)
             total_chars += len(line)
         result.reverse()
         return result

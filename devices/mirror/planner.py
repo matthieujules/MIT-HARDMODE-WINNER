@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import os
 import re
 
 try:
@@ -9,62 +7,20 @@ try:
 except ImportError:
     from models import DisplayPlan
 
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
-
 
 class MirrorInstructionPlanner:
-    def __init__(self) -> None:
-        self.cerebras_client = self._build_cerebras_client()
-        self.cerebras_model = os.getenv("MIRROR_CEREBRAS_MODEL", "gpt-oss-120b")
+    """Deterministic regex planner for mirror display instructions.
+
+    Maps instructions to DisplayPlan with icon, colors, and prompt.
+    High-level reasoning is handled by the agent (Layer 2); this planner
+    only needs to produce a sensible visual plan from a concrete instruction.
+    """
 
     def plan(self, instruction: str) -> DisplayPlan:
         instruction = instruction.strip()
         if not instruction:
             raise ValueError("instruction cannot be empty")
-
-        if self.cerebras_client is not None:
-            plan = self._plan_with_cerebras(instruction)
-            if plan is not None:
-                return plan
-
         return self._plan_locally(instruction)
-
-    def _build_cerebras_client(self) -> OpenAI | None:
-        api_key = os.getenv("CEREBRAS_API_KEY")
-        if not api_key or OpenAI is None:
-            return None
-
-        base_url = os.getenv("CEREBRAS_BASE_URL", "https://api.cerebras.ai/v1")
-        return OpenAI(api_key=api_key, base_url=base_url)
-
-    def _plan_with_cerebras(self, instruction: str) -> DisplayPlan | None:
-        try:
-            # The repo spec targets OpenAI-compatible providers for device planning,
-            # but JSON-mode behavior can vary by provider. Fallback stays deterministic.
-            response = self.cerebras_client.responses.create(
-                model=self.cerebras_model,
-                input=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Plan a smart mirror visual response. Return JSON only with keys "
-                            "display_mode, icon_name, caption, prompt, wants_camera_context, "
-                            "accent_color, background_color."
-                        ),
-                    },
-                    {"role": "user", "content": instruction},
-                ],
-            )
-            text = (response.output_text or "").strip()
-            if not text:
-                return None
-            payload = json.loads(text)
-            return self._plan_from_payload(instruction, payload)
-        except Exception:
-            return None
 
     def _plan_locally(self, instruction: str) -> DisplayPlan:
         lowered = instruction.lower()
@@ -111,19 +67,6 @@ class MirrorInstructionPlanner:
             metadata={"planner": "local"},
         )
 
-    def _plan_from_payload(self, instruction: str, payload: dict) -> DisplayPlan:
-        return DisplayPlan(
-            raw_instruction=instruction,
-            prompt=str(payload.get("prompt") or self._default_prompt(instruction, payload.get("icon_name", "sparkle"))),
-            display_mode=str(payload.get("display_mode") or "scene"),
-            icon_name=str(payload.get("icon_name") or "sparkle"),
-            caption=str(payload.get("caption") or self._caption(instruction)),
-            wants_camera_context=bool(payload.get("wants_camera_context", True)),
-            accent_color=self._parse_color(payload.get("accent_color"), (94, 234, 212)),
-            background_color=self._parse_color(payload.get("background_color"), (11, 18, 32)),
-            metadata={"planner": "cerebras"},
-        )
-
     def _default_prompt(self, instruction: str, icon_name: str) -> str:
         return (
             "Create a vertical smart-mirror display image for a Raspberry Pi LCD. "
@@ -142,22 +85,3 @@ class MirrorInstructionPlanner:
 
     def _matches(self, text: str, pattern: str) -> bool:
         return re.search(pattern, text) is not None
-
-    def _parse_color(
-        self,
-        raw: object,
-        default: tuple[int, int, int],
-    ) -> tuple[int, int, int]:
-        if isinstance(raw, str):
-            value = raw.strip().lstrip("#")
-            if len(value) == 6:
-                try:
-                    return tuple(int(value[idx:idx + 2], 16) for idx in (0, 2, 4))
-                except ValueError:
-                    return default
-        if isinstance(raw, (list, tuple)) and len(raw) == 3:
-            try:
-                return tuple(max(0, min(255, int(component))) for component in raw)
-            except (TypeError, ValueError):
-                return default
-        return default

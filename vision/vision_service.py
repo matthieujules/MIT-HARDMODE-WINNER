@@ -359,31 +359,6 @@ def load_person_detector():
     return model, device
 
 
-def detect_person(frame, model, device) -> tuple[float, float, float] | None:
-    """Run person detection and return the bottom-center point of the best box."""
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    rgb = np.ascontiguousarray(rgb)
-    image_tensor = torch.from_numpy(rgb).permute(2, 0, 1).float().div(255.0).to(device)
-
-    with torch.inference_mode():
-        output = model([image_tensor])[0]
-
-    labels = output["labels"].detach().cpu().numpy()
-    scores = output["scores"].detach().cpu().numpy()
-    boxes = output["boxes"].detach().cpu().numpy()
-
-    person_indices = np.where(labels == 1)[0]
-    if person_indices.size == 0:
-        return None
-
-    best_idx = person_indices[np.argmax(scores[person_indices])]
-    x1, y1, x2, y2 = boxes[best_idx]
-    x_px = float((x1 + x2) / 2.0)
-    y_px = float(y2)
-    confidence = float(scores[best_idx])
-    return x_px, y_px, confidence
-
-
 def detect_people(frame, model, device) -> list[dict]:
     """Run person detection and return bottom-center points for all strong boxes."""
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

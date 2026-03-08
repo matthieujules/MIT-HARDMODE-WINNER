@@ -1,0 +1,66 @@
+device_id: lamp
+device_name: Lamp
+device_type: lem_arm
+
+network:
+  ip: "lamp-pi"
+  ssh_user: pi
+  master_url: "http://claude-master:8000"
+
+# -- LED hardware ----------------------------------------------------------
+led:
+  pins:
+    red: 17
+    green: 27
+    blue: 22
+  pwm_frequency: 1000
+  default_color:
+    r: 255
+    g: 180
+    b: 120
+  brightness_scale: 1.0
+
+# -- Arm hardware ----------------------------------------------------------
+arm:
+  serial_port: "/dev/ttyACM0"
+  baud_rate: 1000000
+  motor_model: "sts3215"
+
+capabilities:
+  - arm
+  - light
+  - emote
+
+actions:
+  pose:
+    description: "Move the arm to a named pose or play an animation"
+    params:
+      name: str
+  set_color:
+    description: "Set the RGB light color"
+    params:
+      r: int
+      g: int
+      b: int
+  set_brightness:
+    description: "Set overall light brightness (0.0-1.0)"
+    params:
+      brightness: float
+  flash:
+    description: "Flash a color briefly then return to previous"
+    params:
+      r: int
+      g: int
+      b: int
+      duration_ms: int
+  pulse:
+    description: "Pulse/breathe effect with a color"
+    params:
+      r: int
+      g: int
+      b: int
+      cycles: int
+      period_ms: int
+  reset_pose:
+    description: "Return to the home pose"
+    params: {}

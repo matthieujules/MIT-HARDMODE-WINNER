@@ -24,17 +24,13 @@
   "waypoints": [
     {"id": "door", "x_cm": 440, "y_cm": 320, "label": "Door"},
     {"id": "table_center", "x_cm": 250, "y_cm": 160, "label": "Table Center"},
-    {"id": "host_seat", "x_cm": 250, "y_cm": 250, "label": "Sally Seat"},
-    {"id": "guest_seat", "x_cm": 250, "y_cm": 68, "label": "Tom Seat"},
+    {"id": "host_seat", "x_cm": 250, "y_cm": 250, "label": "Seat 1"},
+    {"id": "guest_seat", "x_cm": 250, "y_cm": 68, "label": "Seat 2"},
     {"id": "fruit_service", "x_cm": 336, "y_cm": 186, "label": "Fruit Bowl"},
     {"id": "corner", "x_cm": 455, "y_cm": 40, "label": "Corner"}
   ],
-  "people_templates": [
-    {"id": "sally", "label": "Sally", "role": "primary", "x_cm": 250, "y_cm": 250},
-    {"id": "tom", "label": "Tom", "role": "guest", "x_cm": 250, "y_cm": 68}
-  ],
   "people_default_positions": [
-    {"id": "sally", "label": "Sally", "role": "primary", "x_cm": 250, "y_cm": 250}
+    {"id": "person_1", "label": "User 1", "x_cm": 250, "y_cm": 250}
   ],
-  "user_default_position": {"x_cm": 250, "y_cm": 250, "label": "Sally"}
+  "user_default_position": {"x_cm": 250, "y_cm": 250, "label": "User 1"}
 }

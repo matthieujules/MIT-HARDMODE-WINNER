@@ -34,17 +34,26 @@ Only the `.mmd` sources are tracked. Rendered exports should be treated as dispo
 | `control_plane/SOUL.md` | Master home personality, multi-person rules, tool-use rules |
 | `requirements.txt` | Python dependencies |
 
-### Lamp Device Runtime (fully working, tested end-to-end)
+### Lamp Device Runtime (fully working, arm + LED tested end-to-end on real hardware)
 
 | File | Purpose |
 |------|---------|
 | `devices/lamp/main.py` | Entry point: `--connect` for WS runtime, CLI sim mode preserved |
 | `devices/lamp/ws_client.py` | WebSocket client: register, connect, heartbeat, auto-reconnect |
-| `devices/lamp/agent.py` | LLM agent loop (Cerebras gpt-oss-120b), tool execution, warmup |
-| `devices/lamp/hardware.py` | Hardware controller (SO-101 arm + RGB LED), sim mode |
-| `devices/lamp/planner.py` | Regex planner for direct commands (used by ws_client Layer 1) |
+| `devices/lamp/agent.py` | LLM agent loop (Cerebras gpt-oss-120b), tools: `pose`, `set_color`, `set_brightness`, `flash`, `pulse`, `done` |
+| `devices/lamp/hardware.py` | Hardware controller: lerobot Robot API for arm (smooth interpolation), LED_control for RGB LED |
+| `devices/lamp/planner.py` | Simplified regex planner for Layer 1 direct commands (COLOR_MAP, POSE_HINTS) |
+| `devices/lamp/LED_control.py` | lgpio PWM RGB LED driver (GPIO 17/27/22) |
+| `devices/lamp/poses.json` | Recorded poses — on Pi only. Tools built dynamically from this file (no code changes needed to add poses) |
+| `devices/lamp/move.py` | Direct servo movement CLI (standalone utility) |
+| `devices/lamp/record.py` | Pose recording utility (standalone) |
+| `devices/lamp/play_animation.py` | Replay recorded pose sequences (standalone) |
+| `devices/lamp/test_led.py` | LED test sequences (standalone) |
+| `devices/lamp/test_hardware.py` | Standalone hardware test script for Pi |
+| `devices/lamp/sync.sh` | rsync deploy script for Pi |
 
-Run: `cd devices/lamp && MASTER_URL="http://localhost:8000" python3 main.py --connect`
+Run on Pi: `ssh -f lamp@lamphost 'cd /home/lamp/Desktop/lamp && nohup /home/lamp/Desktop/venv/bin/python3 main.py --connect --live-serial > /tmp/lamp.log 2>&1 &'`
+Deploy: `cd devices/lamp && ./sync.sh`
 
 ### Voice Pipeline (sidecar)
 
@@ -68,6 +77,7 @@ Run: `python3 -m vision.vision_service` (or `--test`, `--calibrate`)
 | File | Purpose |
 |------|---------|
 | `dashboard/map.js` | SVG room map, device icons, brain HUD terminal, device panels, rover animation |
+| `dashboard/state.js` | State pills (mode, mood, people count), polling updates |
 | `dashboard/timeline.js` | Event/dispatch feed, generates overlay data for map.js |
 | `dashboard/styles.css` | Dark theme, brain HUD, device panel cards, animations |
 | `dashboard/index.html` | Full-viewport layout, polling loop, transcript input |
@@ -98,7 +108,7 @@ cd devices/lamp && MASTER_URL="http://localhost:8000" python3 main.py --connect
 
 # 5. Register other devices (no runtime yet, but master can reason about them)
 curl -X POST localhost:8000/register -H 'Content-Type: application/json' \
-  -d '{"device_id":"mirror","device_name":"Mirror","device_type":"companion","capabilities":["see","display_image","move_tilt"],"actions":["display_image","tilt","nod"],"ip":"mirror-pi"}'
+  -d '{"device_id":"mirror","device_name":"Mirror","device_type":"picture_frame","capabilities":["see","display_image"],"actions":["display_image"],"ip":"mirror-pi"}'
 
 # 6. Test master reasoning (all transcripts go to master, no deterministic routing)
 curl -X POST localhost:8000/events -H 'Content-Type: application/json' \
@@ -125,12 +135,12 @@ MASTER_PROVIDER=auto             # auto-detects from model name. Options: anthro
 # Device agents (lamp, mirror)
 CEREBRAS_API_KEY=csk-...         # REQUIRED for lamp/mirror LLM agent loops
 LAMP_AGENT_MODEL=gpt-oss-120b   # Default. Cerebras model for lamp agent
-MIRROR_CEREBRAS_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
+MIRROR_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 ```
 
 ### Data Files (gitignored, in `data/`)
 
-- `state.json` — current home state (mode, mood, energy, voice_lock)
+- `state.json` — current home state (mode, mood, people_count, voice_lock)
 - `devices.json` — registered device info
 - `event_log.jsonl` — all incoming events
 - `master_log.jsonl` — full master reasoning turns (trigger, context, decisions, dispatches, latency)
@@ -138,7 +148,7 @@ MIRROR_CEREBRAS_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 ## What's Not Built Yet
 
 - **Mirror/Radio/Rover runtimes** — Lamp runtime is the template; other devices need their own
-- **TTS** — ElevenLabs/Piper integration for Mirror and Radio
+- **TTS** — ElevenLabs/Piper integration for Radio (mirror has no speaker)
 - **Tick scheduler** — periodic tick event generator (currently manual via curl)
 
 ## V1 Stack
@@ -151,6 +161,7 @@ MIRROR_CEREBRAS_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 - Silero VAD + Groq Whisper sidecar for voice capture
 - Voice events preempt vision-triggered master turns (cancellation + lock release)
 - Lamp runtime on laptop (Cerebras gpt-oss-120b agent loop, tested end-to-end)
+- Mirror is a picture frame (camera + display, no speaker, no tilt servo)
 - Other device runtimes not yet built
 
 ## Design Principles
@@ -177,6 +188,9 @@ MIRROR_CEREBRAS_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 - **Transcript debouncer buffers 1.5s** — test events via curl return "transcript buffered" immediately. Master reasoning fires async after the flush. Check master-log after 3-15s.
 - **Resetting state.json clears spatial positions** — if you wipe state, device positions disappear from the dashboard. Restore from room.json anchors.
 - **Emergency stop pattern is strict** — requires "stop stop", "stop all", "emergency stop", "freeze all", or "no no no". Single "stop" does NOT trigger it (was too sensitive with voice transcription).
+- **`gripper.pos` must be stripped from poses** — SO100FollowerConfig has 5 motors, no gripper. Passing `gripper.pos` causes `StopIteration` crash. `hardware.py` handles this automatically.
+- **Lamp hardware.py uses Robot API, NOT raw servo bus** — `compat.py` was deleted. The working path is `SO100FollowerConfig` + `make_robot_from_config()` + `robot.send_action()` with `.pos` suffix keys.
+- **Lamp poses are dynamic** — agent tools are built from `poses.json` at boot. To add a pose: `record.py save <name>` on Pi → restart lamp process. No code changes or redeployment needed.
 
 **Orchestrate, don't implement.** Delegate multi-file work to subagents (Task tool). Your context is for orchestration.
 

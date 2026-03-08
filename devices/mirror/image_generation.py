@@ -30,13 +30,13 @@ class MirrorImageGenerator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.display_size = display_size
         self.client = self._build_image_client()
-        self.image_model = os.getenv("MIRROR_IMAGE_MODEL", "gpt-image-1")
+        self.image_model = os.getenv("MIRROR_IMAGE_MODEL", "gpt-image-1.5")
         self.image_quality = os.getenv("MIRROR_IMAGE_QUALITY", "medium")
 
-    def generate(self, plan: DisplayPlan, frame: CapturedFrame) -> GenerationResult:
+    def generate(self, plan: DisplayPlan, frame: CapturedFrame, allow_api: bool = True) -> GenerationResult:
         generated = None
         api_error = None
-        if self.client is not None:
+        if allow_api and self.client is not None:
             generated, api_error = self._try_generate_with_api(plan, frame)
 
         if generated is None:
@@ -58,6 +58,75 @@ class MirrorImageGenerator:
             },
             api_error=api_error,
         )
+
+    def edit_frame(self, frame: CapturedFrame, prompt: str) -> GenerationResult:
+        """Edit a camera frame directly with a prompt (e.g. outfit changes, style edits).
+
+        Bypasses the planner — the prompt goes straight to the image edit API.
+        Falls back to generate-from-prompt if edit fails, then to local fallback.
+        """
+        api_error = None
+        generated = None
+
+        if self.client is not None:
+            # Try edit first (uses camera frame as input image)
+            try:
+                generated = self._edit_from_camera_frame_raw(frame, prompt)
+            except Exception as exc:
+                edit_error = f"{type(exc).__name__}: {exc}"
+                # Fall back to generate-from-prompt
+                try:
+                    generated = self._generate_from_prompt_raw(prompt)
+                    api_error = f"edit failed ({edit_error}), generated from prompt instead"
+                except Exception as gen_exc:
+                    api_error = f"edit failed: {edit_error}; generate failed: {type(gen_exc).__name__}: {gen_exc}"
+
+        if generated is None:
+            # Local fallback: just show the camera frame resized
+            generated = frame.image.convert("RGB").resize(self.display_size, Image.Resampling.LANCZOS)
+            source = "local_fallback"
+        else:
+            source = "image_api_edit"
+
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        path = self.output_dir / f"{timestamp}-edit.png"
+        generated.convert("RGB").save(path)
+        latest = self.output_dir / "latest.png"
+        generated.convert("RGB").save(latest)
+
+        return GenerationResult(
+            image=generated,
+            source=source,
+            saved_path=path,
+            metadata={"prompt": prompt, "display_mode": "edit", "icon_name": "edit"},
+            api_error=api_error,
+        )
+
+    def _edit_from_camera_frame_raw(self, frame: CapturedFrame, prompt: str) -> Image.Image:
+        """Edit a camera frame with a raw prompt string."""
+        buffer = io.BytesIO()
+        frame.image.convert("RGBA").save(buffer, format="PNG")
+        response = self.client.images.edit(
+            model=self.image_model,
+            image=("mirror-frame.png", buffer.getvalue(), "image/png"),
+            prompt=prompt,
+            quality=self.image_quality,
+            input_fidelity="high",
+            output_format="png",
+            size=self._api_size(),
+        )
+        return self._decode_response_image(response).resize(self.display_size, Image.Resampling.LANCZOS)
+
+    def _generate_from_prompt_raw(self, prompt: str) -> Image.Image:
+        """Generate an image from a raw prompt string."""
+        response = self.client.images.generate(
+            model=self.image_model,
+            prompt=prompt,
+            quality=self.image_quality,
+            output_format="png",
+            size=self._api_size(),
+        )
+        return self._decode_response_image(response).resize(self.display_size, Image.Resampling.LANCZOS)
 
     def _build_image_client(self) -> OpenAI | None:
         api_key = os.getenv("MIRROR_IMAGE_API_KEY") or os.getenv("OPENAI_API_KEY")
