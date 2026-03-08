@@ -18,16 +18,20 @@ COLOR_MAP = {
 }
 
 JOINT_ALIASES = {
-    "base": "base_yaw",
-    "base_yaw": "base_yaw",
-    "yaw": "base_yaw",
-    "shoulder": "shoulder_pitch",
-    "shoulder_pitch": "shoulder_pitch",
-    "pitch": "wrist_pitch",
-    "elbow": "elbow",
-    "wrist": "wrist_pitch",
-    "wrist_pitch": "wrist_pitch",
-    "wristpitch": "wrist_pitch",
+    "base": "shoulder_pan",
+    "base_yaw": "shoulder_pan",
+    "yaw": "shoulder_pan",
+    "shoulder_pan": "shoulder_pan",
+    "shoulder": "shoulder_lift",
+    "shoulder_lift": "shoulder_lift",
+    "shoulder_pitch": "shoulder_lift",
+    "elbow": "elbow_flex",
+    "elbow_flex": "elbow_flex",
+    "wrist": "wrist_flex",
+    "wrist_flex": "wrist_flex",
+    "wrist_pitch": "wrist_flex",
+    "wristpitch": "wrist_flex",
+    "pitch": "wrist_flex",
     "roll": "wrist_roll",
     "wrist_roll": "wrist_roll",
     "wristroll": "wrist_roll",
@@ -65,7 +69,7 @@ class InstructionPlanner:
     def __init__(self, config: dict):
         self.config = config
         self.presets = config.get("presets", {})
-        self.joint_names = tuple(config["hardware"]["arm"]["joints"].keys())
+        self.joint_names = tuple(config["arm"]["joints"].keys())
 
     def plan(self, instruction: str, current_joints: dict[str, float], current_color: dict[str, int]) -> ArmPlan:
         text = instruction.strip()
@@ -101,7 +105,7 @@ class InstructionPlanner:
 
         brightness = self._parse_brightness(lowered)
         if brightness is None:
-            brightness = float(self.config["hardware"]["lemp"].get("brightness_scale", 1.0))
+            brightness = float(self.config.get("led", {}).get("brightness_scale", 1.0))
         else:
             notes.append("applied explicit brightness override")
 
@@ -133,7 +137,7 @@ class InstructionPlanner:
     def _parse_joint_angles(self, lowered: str) -> dict[str, float]:
         matches: dict[str, float] = {}
         pattern = re.compile(
-            r"\b(base_yaw|base|yaw|shoulder|shoulder_pitch|elbow|wrist|wrist_pitch|wristpitch|roll|wrist_roll|wristroll|pitch)\s*(?:to|at|=|:)?\s*(-?\d+(?:\.\d+)?)\b"
+            r"\b(shoulder_pan|shoulder_lift|elbow_flex|wrist_flex|wrist_roll|base_yaw|base|yaw|shoulder_pitch|shoulder|elbow|wrist_pitch|wristpitch|wrist|roll|wristroll|pitch)\s*(?:to|at|=|:)?\s*(-?\d+(?:\.\d+)?)\b"
         )
         for alias, value in pattern.findall(lowered):
             matches[JOINT_ALIASES[alias]] = float(value)

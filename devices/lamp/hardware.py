@@ -1,539 +1,206 @@
+"""Hardware controller for the Lamp device.
+
+Bridges the agent/ws_client interface to LAMP_TASC hardware:
+  - LED_control.LEDController for RGB LED (RPi.GPIO PWM)
+  - compat.make_bus() for Feetech servo bus (lerobot)
+
+In sim mode (default on Mac), all hardware calls are logged but no
+real GPIO or serial I/O occurs.  Sim mode is auto-detected when
+RPi.GPIO or lerobot are not importable, or can be forced via the
+``simulate`` constructor flag.
+"""
+
 from __future__ import annotations
 
-import importlib
-import inspect
 import json
+import logging
+import time
 from pathlib import Path
 from typing import Any
 
-from kinematics import forward_kinematics_mm, geometry_from_config
-from light_controller import LEMPLightController
 from planner import ArmPlan
 
+logger = logging.getLogger(__name__)
 
-def _load_lerobot_feetech() -> tuple[type[Any], type[Any], type[Any], type[Any], type[Any]]:
-    candidates = [
-        (
-            "lerobot.motors.feetech",
-            "lerobot.motors",
-            "FeetechMotorsBus",
-            "Motor",
-            "MotorNormMode",
-            "MotorCalibration",
-            "OperatingMode",
-        ),
-        (
-            "lerobot.common.robot_devices.motors.feetech",
-            "lerobot.common.robot_devices.motors.utils",
-            "FeetechMotorsBus",
-            "Motor",
-            "MotorNormMode",
-            "MotorCalibration",
-            "OperatingMode",
-        ),
-    ]
-
-    last_error: Exception | None = None
-    for bus_module_name, model_module_name, bus_attr, motor_attr, norm_attr, calib_attr, op_mode_attr in candidates:
-        try:
-            bus_module = importlib.import_module(bus_module_name)
-            model_module = importlib.import_module(model_module_name)
-            return (
-                getattr(bus_module, bus_attr),
-                getattr(model_module, motor_attr),
-                getattr(model_module, norm_attr),
-                getattr(model_module, calib_attr),
-                getattr(bus_module, op_mode_attr),
-            )
-        except Exception as error:  # pragma: no cover - import compatibility branch
-            last_error = error
-
-    raise RuntimeError(
-        "LeRobot Feetech support is not installed. Install the Lamp dependencies and ensure "
-        "`lerobot[feetech]` is available on the Pi."
-    ) from last_error
+# Joint names used by LAMP_TASC / lerobot / compat.py
+JOINT_NAMES = ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]
 
 
 class LEMHardwareController:
-    def __init__(self, config: dict, simulate: bool = True, enable_light: bool = True):
+    """Unified hardware controller consumed by agent.py, ws_client.py, and main.py.
+
+    Public interface:
+        current_joints  : dict[str, float]   — current joint positions
+        current_color   : dict[str, int]     — current RGB color {r, g, b}
+        config          : dict               — the loaded config.yaml
+        apply_plan(plan: ArmPlan) -> dict    — execute an ArmPlan
+        close() -> None                      — release hardware resources
+    """
+
+    def __init__(self, config: dict, simulate: bool = True):
         self.config = config
         self.simulate = simulate
-        self.enable_light = enable_light
-        self.geometry = geometry_from_config(config)
-        self.arm_config = config["hardware"]["arm"]
-        self.lerobot_config = self.arm_config.get("lerobot", {})
-        self.joint_config = self.arm_config["joints"]
-        self.readback_config = self.arm_config.get("readback", {})
-        self.calibration = {} if simulate else self._load_calibration()
-        self.current_joints = {
-            joint_name: float(joint["home_angle"])
-            for joint_name, joint in self.joint_config.items()
+
+        # LED config lives under config["led"]
+        led_cfg = config.get("led", {})
+        self.current_color: dict[str, int] = {
+            "r": int(led_cfg.get("default_color", {}).get("r", 255)),
+            "g": int(led_cfg.get("default_color", {}).get("g", 180)),
+            "b": int(led_cfg.get("default_color", {}).get("b", 120)),
         }
-        self.current_color = {
-            channel: int(value)
-            for channel, value in config["hardware"]["lemp"]["default_color"].items()
+        self._brightness_scale: float = float(led_cfg.get("brightness_scale", 1.0))
+
+        # Arm config lives under config["arm"]
+        arm_cfg = config.get("arm", {})
+        joints_cfg = arm_cfg.get("joints", {})
+        # Initialise joint positions at zero (lerobot normalized midpoint)
+        self.current_joints: dict[str, float] = {
+            name: 0.0 for name in (joints_cfg.keys() if joints_cfg else JOINT_NAMES)
         }
-        self.light_controller = (
-            LEMPLightController(
-                config["hardware"]["lemp"],
-                simulate=simulate,
-            )
-            if enable_light
-            else None
-        )
+
+        # Hardware handles (lazy-init on first real-hardware call)
+        self._led: Any | None = None
         self._bus: Any | None = None
 
+        if not simulate:
+            self._init_hardware(config)
+
+    # ── Public interface ──────────────────────────────────────────
+
     def apply_plan(self, plan: ArmPlan) -> dict:
-        payload = self.apply_pose(
-            joints=plan.joints,
-            duration_ms=plan.duration_ms,
-            color=plan.color,
-            brightness=plan.brightness,
-        )
+        """Execute an ArmPlan: move joints and set LED color.
+
+        Returns a summary dict with the executed state.
+        """
+        # Resolve joint targets — only update joints that are present in the plan
+        target_joints = dict(self.current_joints)
+        for name, value in plan.joints.items():
+            if name in target_joints:
+                target_joints[name] = float(value)
+
+        # Resolve color
+        color = plan.color if plan.color else dict(self.current_color)
+        brightness = plan.brightness if plan.brightness is not None else self._brightness_scale
+        scaled_color = self._scale_color(color, brightness)
+
+        # Execute on hardware or sim
+        self._set_joints(target_joints, plan.duration_ms)
+        self._set_led(scaled_color)
+
+        # Play light animation frames if present
         if plan.light_frames:
-            payload["light_animation"] = self.play_light_animation(
-                frames=plan.light_frames,
-                brightness=plan.brightness,
-                loop_count=1,
-            )
-        return payload
+            self._play_light_frames(plan.light_frames, brightness)
 
-    def apply_pose(
-        self,
-        joints: dict[str, float],
-        duration_ms: int = 1000,
-        color: dict[str, int] | None = None,
-        brightness: float = 1.0,
-    ) -> dict:
-        clamped_joints = {
-            joint_name: self._clamp_angle(joint_name, joints.get(joint_name, self.current_joints[joint_name]))
-            for joint_name in self.joint_config
-        }
-        resolved_color = color or self.current_color
-        scaled_color = self._scale_color(resolved_color, brightness)
-        pose_xyz = forward_kinematics_mm(clamped_joints, self.geometry)
-
-        payload = {
-            "duration_ms": int(duration_ms),
-            "joints": [
-                {
-                    "name": joint_name,
-                    "servo_id": int(self.joint_config[joint_name]["servo_id"]),
-                    "angle_deg": round(clamped_joints[joint_name], 3),
-                }
-                for joint_name in self.joint_config
-            ],
-            "lemp": {
-                "rgb": scaled_color,
-                "brightness": round(brightness, 3),
-                "pins": self.config["hardware"]["lemp"]["pins"],
-            },
-            "pose_preview_mm": pose_xyz,
-        }
-
-        if not self.simulate:
-            self.enable_torque()
-        self._emit_joint_targets(clamped_joints, duration_ms)
-        if self.enable_light:
-            self._emit_light_payload(payload["lemp"])
-
-        self.current_joints = clamped_joints
+        # Update state
+        self.current_joints = target_joints
         self.current_color = scaled_color
-        return payload
 
-    def read_current_joints(self) -> dict[str, float]:
-        if self.simulate:
-            return dict(self.current_joints)
-
-        bus = self._get_bus()
-        register_name = str(self.readback_config.get("register", "Present_Position"))
-        raw_positions = self._sync_read(bus, register_name, normalize=True)
-        if len(raw_positions) != len(self.joint_config):
-            raise RuntimeError(
-                f"Expected {len(self.joint_config)} motor positions, received {len(raw_positions)}"
-            )
-
-        resolved = {}
-        for joint_name in self.joint_config.keys():
-            bus_value = raw_positions[joint_name]
-            resolved[joint_name] = self._clamp_angle(
-                joint_name,
-                self._bus_value_to_angle(joint_name, float(bus_value)),
-            )
-        self.current_joints.update(resolved)
-        return dict(self.current_joints)
-
-    def read_current_bus_positions(self) -> dict[str, float]:
-        if self.simulate:
-            return {
-                joint_name: float(angle)
-                for joint_name, angle in self.current_joints.items()
-            }
-
-        bus = self._get_bus()
-        register_name = str(self.readback_config.get("register", "Present_Position"))
-        positions = self._sync_read(bus, register_name, normalize=False)
-        if len(positions) != len(self.joint_config):
-            raise RuntimeError(
-                f"Expected {len(self.joint_config)} motor positions, received {len(positions)}"
-            )
         return {
-            joint_name: float(positions[joint_name])
-            for joint_name in self.joint_config.keys()
+            "joints": dict(target_joints),
+            "color": dict(scaled_color),
+            "brightness": round(brightness, 3),
+            "duration_ms": plan.duration_ms,
+            "pose_preview_mm": {},  # kinematics removed — not needed for demo
         }
-
-    def enable_torque(self) -> None:
-        if self.simulate:
-            print("SIMULATED_TORQUE_ON")
-            return
-        bus = self._get_bus()
-        if hasattr(bus, "enable_torque"):
-            try:
-                bus.enable_torque()
-                return
-            except TypeError:
-                pass
-        self._write_all_motors(bus, "Torque_Enable", 1)
-
-    def disable_torque(self) -> None:
-        if self.simulate:
-            print("SIMULATED_TORQUE_OFF")
-            return
-        bus = self._get_bus()
-        if hasattr(bus, "disable_torque"):
-            try:
-                bus.disable_torque()
-                return
-            except TypeError:
-                pass
-        self._write_all_motors(bus, "Torque_Enable", 0)
-
-    def interpolate_poses(
-        self,
-        start_joints: dict[str, float],
-        end_joints: dict[str, float],
-        steps: int,
-    ) -> list[dict[str, float]]:
-        if steps < 2:
-            return [dict(end_joints)]
-
-        frames: list[dict[str, float]] = []
-        joint_names = list(self.joint_config.keys())
-        for index in range(steps):
-            alpha = index / (steps - 1)
-            frame = {
-                joint_name: round(
-                    float(start_joints[joint_name])
-                    + (float(end_joints[joint_name]) - float(start_joints[joint_name])) * alpha,
-                    3,
-                )
-                for joint_name in joint_names
-            }
-            frames.append(frame)
-        return frames
 
     def close(self) -> None:
-        if self.light_controller is not None:
-            self.light_controller.close()
-        if self._bus is not None and hasattr(self._bus, "disconnect"):
-            self._bus.disconnect()
+        """Release hardware resources."""
+        if self._led is not None:
+            try:
+                self._led.cleanup()
+            except Exception as e:
+                logger.warning("LED cleanup error: %s", e)
+            self._led = None
+
+        if self._bus is not None:
+            try:
+                self._bus.disconnect()
+            except Exception as e:
+                logger.warning("Bus disconnect error: %s", e)
             self._bus = None
 
-    def _emit_joint_targets(self, joints: dict[str, float], duration_ms: int) -> None:
-        if self.simulate:
-            print("SIMULATED_FEETECH_GOAL")
-            print(
-                json.dumps(
-                    {
-                        "duration_ms": int(duration_ms),
-                        "goal_positions": {
-                            joint_name: round(joints[joint_name], 3)
-                            for joint_name, angle in joints.items()
-                        },
-                    },
-                    indent=2,
-                    sort_keys=True,
-                )
+    # ── Hardware init ─────────────────────────────────────────────
+
+    def _init_hardware(self, config: dict) -> None:
+        """Initialise real hardware handles. Only called when simulate=False."""
+        # LED
+        try:
+            from LED_control import LEDController
+            self._led = LEDController()
+            # Set default color on boot
+            self._led.set_color(
+                self.current_color["r"],
+                self.current_color["g"],
+                self.current_color["b"],
+            )
+            logger.info("LED hardware initialised")
+        except Exception as e:
+            logger.error("Failed to init LED hardware: %s — falling back to sim for LED", e)
+
+        # Servo bus
+        try:
+            from compat import make_bus
+            port = config.get("arm", {}).get("serial_port", "/dev/ttyACM0")
+            self._bus = make_bus(port=port)
+            logger.info("Servo bus initialised on %s", port)
+        except Exception as e:
+            logger.error("Failed to init servo bus: %s — falling back to sim for arm", e)
+
+    # ── Joint control ─────────────────────────────────────────────
+
+    def _set_joints(self, joints: dict[str, float], duration_ms: int) -> None:
+        """Send joint targets to the servo bus, or log in sim mode."""
+        if self.simulate or self._bus is None:
+            logger.info(
+                "SIM joints: %s (duration=%dms)",
+                json.dumps({k: round(v, 2) for k, v in joints.items()}),
+                duration_ms,
             )
             return
 
-        bus = self._get_bus()
-        goal_positions = {
-            joint_name: self._angle_to_bus_value(joint_name, float(joints[joint_name]))
-            for joint_name in self.joint_config
-        }
-        self._sync_write(bus, "Goal_Position", goal_positions, normalize=True)
-
-    def _emit_light_payload(self, lemp_payload: dict) -> None:
-        if self.light_controller is None:
-            return
-        self.light_controller.set_rgb(
-            lemp_payload["rgb"],
-            brightness=float(lemp_payload.get("brightness", 1.0)),
-        )
-
-    def play_light_animation(
-        self,
-        frames: list[tuple[int, int, int, int]],
-        brightness: float = 1.0,
-        loop_count: int = 1,
-    ) -> list[dict]:
-        payloads = self.light_controller.play_frames(
-            frames=frames,
-            brightness=brightness,
-            loop_count=loop_count,
-        )
-        if payloads:
-            self.current_color = dict(payloads[-1]["rgb"])
-        return payloads
-
-    def _get_bus(self) -> Any:
-        if self._bus is not None:
-            return self._bus
-
-        FeetechMotorsBus, Motor, MotorNormMode, MotorCalibration, OperatingMode = _load_lerobot_feetech()
-        norm_mode_name = str(self.arm_config.get("norm_mode", "RANGE_M100_100"))
         try:
-            norm_mode = getattr(MotorNormMode, norm_mode_name)
-        except AttributeError as error:
-            raise RuntimeError(f"Unsupported MotorNormMode '{norm_mode_name}' in lamp config.") from error
-
-        motor_model = self.arm_config.get("motor_model", "sts3215")
-        motor_definitions = {
-            joint_name: Motor(
-                int(joint["servo_id"]),
-                motor_model,
-                norm_mode,
-            )
-            for joint_name, joint in self.joint_config.items()
-        }
-
-        serial_config = self.arm_config["serial"]
-        bus_kwargs = {
-            "port": serial_config["port"],
-            "motors": motor_definitions,
-            "calibration": {
-                joint_name: MotorCalibration(**calibration_values)
-                for joint_name, calibration_values in self.calibration.items()
-            },
-        }
-        try:
-            signature = inspect.signature(FeetechMotorsBus)
-            if "baudrate" in signature.parameters:
-                bus_kwargs["baudrate"] = int(serial_config.get("baud_rate", 1000000))
-        except (TypeError, ValueError):
-            pass
-
-        self._bus = FeetechMotorsBus(**bus_kwargs)
-        self._bus.connect()
-        self._configure_bus(OperatingMode)
-        return self._bus
-
-    def _configure_bus(self, OperatingMode: Any) -> None:
-        bus = self._bus
-        if bus is None:
-            return
-
-        torque_disabled = getattr(bus, "torque_disabled", None)
-        configure_motors = getattr(bus, "configure_motors", None)
-
-        if callable(torque_disabled) and callable(configure_motors):
-            with torque_disabled():
-                configure_motors()
-                for motor in self.joint_config:
-                    self._write_motor_setting(bus, "Operating_Mode", motor, OperatingMode.POSITION.value)
-                    self._write_motor_setting(bus, "P_Coefficient", motor, 16)
-                    self._write_motor_setting(bus, "I_Coefficient", motor, 0)
-                    self._write_motor_setting(bus, "D_Coefficient", motor, 32)
-            return
-
-        if callable(configure_motors):
-            configure_motors()
-
-    def _write_motor_setting(self, bus: Any, register_name: str, motor: str, value: Any) -> None:
-        write = getattr(bus, "write", None)
-        if not callable(write):
-            return
-
-        attempts = [
-            (register_name, {motor: value}),
-            (register_name, [motor], value),
-            (register_name, motor, value),
-            (register_name, value, motor),
-        ]
-        for attempt in attempts:
-            try:
-                write(*attempt)
-                return
-            except TypeError:
-                continue
-
-    def _write_all_motors(self, bus: Any, register_name: str, value: Any) -> None:
-        write = getattr(bus, "write", None)
-        if not callable(write):
-            return
-
-        motor_names = list(self.joint_config.keys())
-        attempts = [
-            (register_name, motor_names, value),
-            (register_name, {motor: value for motor in motor_names}),
-        ]
-        for attempt in attempts:
-            try:
-                write(*attempt)
-                return
-            except TypeError:
-                continue
-
-    def _sync_read(self, bus: Any, register_name: str, normalize: bool = True) -> dict[str, float]:
-        method = getattr(bus, "sync_read", None)
-        if method is None:
-            raise RuntimeError("Feetech bus does not expose sync_read().")
-        try:
-            values = method(register_name, normalize=normalize)
+            # Use lerobot FeetechMotorsBus sync_write with normalized values
+            # The values are already in lerobot normalized range (-100 to 100)
+            self._bus.sync_write("Goal_Position", joints, normalize=True)
+            logger.info("HW joints: %s", {k: round(v, 2) for k, v in joints.items()})
         except TypeError:
-            values = method(register_name)
+            # Fallback for older lerobot API
+            self._bus.sync_write("Goal_Position", joints)
+            logger.info("HW joints (no normalize): %s", {k: round(v, 2) for k, v in joints.items()})
+        except Exception as e:
+            logger.error("Failed to write joint positions: %s", e)
 
-        if isinstance(values, dict):
-            return {
-                str(joint_name): float(value)
-                for joint_name, value in values.items()
-            }
+    # ── LED control ───────────────────────────────────────────────
 
-        sequence = list(values)
-        if len(sequence) != len(self.joint_config):
-            raise RuntimeError(
-                f"Expected {len(self.joint_config)} values from sync_read, received {len(sequence)}"
-            )
-        return {
-            joint_name: float(sequence[index])
-            for index, joint_name in enumerate(self.joint_config.keys())
-        }
-
-    def _sync_write(self, bus: Any, register_name: str, values: Any, normalize: bool = True) -> None:
-        sync_write = getattr(bus, "sync_write", None)
-        if callable(sync_write):
-            try:
-                sync_write(register_name, values, normalize=normalize)
-            except TypeError:
-                sync_write(register_name, values)
+    def _set_led(self, color: dict[str, int]) -> None:
+        """Set LED color, or log in sim mode."""
+        if self.simulate or self._led is None:
+            logger.info("SIM LED: R=%d G=%d B=%d", color["r"], color["g"], color["b"])
             return
 
-        write = getattr(bus, "write", None)
-        if callable(write):
-            try:
-                write(register_name, values, normalize=normalize)
-                return
-            except TypeError:
-                try:
-                    write(register_name, values)
-                    return
-                except TypeError:
-                    write(register_name, values, list(self.joint_config.keys()))
-                    return
+        try:
+            self._led.set_color(color["r"], color["g"], color["b"])
+            logger.info("HW LED: R=%d G=%d B=%d", color["r"], color["g"], color["b"])
+        except Exception as e:
+            logger.error("Failed to set LED color: %s", e)
 
-        raise RuntimeError("Feetech bus does not expose sync_write() or write().")
+    def _play_light_frames(
+        self, frames: list[tuple[int, int, int, int]], brightness: float
+    ) -> None:
+        """Play a sequence of (R, G, B, time_ms) light frames."""
+        for r, g, b, t_ms in frames:
+            scaled = self._scale_color({"r": r, "g": g, "b": b}, brightness)
+            self._set_led(scaled)
+            self.current_color = scaled
+            time.sleep(max(0, t_ms) / 1000.0)
 
-    def _clamp_angle(self, joint_name: str, angle: float) -> float:
-        limits = self.joint_config[joint_name]
-        return max(float(limits["min_angle"]), min(float(limits["max_angle"]), float(angle)))
-
-    def _normalized_range(self) -> tuple[float, float] | None:
-        mode = str(self.arm_config.get("norm_mode", "")).upper()
-        if mode == "RANGE_M100_100":
-            return (-100.0, 100.0)
-        if mode == "RANGE_0_100":
-            return (0.0, 100.0)
-        return None
-
-    def _bus_value_to_angle(self, joint_name: str, value: float) -> float:
-        norm_range = self._normalized_range()
-        if norm_range is None:
-            return float(value)
-
-        joint = self.joint_config[joint_name]
-        min_angle = float(joint["min_angle"])
-        max_angle = float(joint["max_angle"])
-        low, high = norm_range
-        alpha = (float(value) - low) / (high - low)
-        return min_angle + alpha * (max_angle - min_angle)
-
-    def _angle_to_bus_value(self, joint_name: str, angle: float) -> float:
-        norm_range = self._normalized_range()
-        if norm_range is None:
-            return float(angle)
-
-        joint = self.joint_config[joint_name]
-        min_angle = float(joint["min_angle"])
-        max_angle = float(joint["max_angle"])
-        clamped_angle = self._clamp_angle(joint_name, angle)
-        if max_angle == min_angle:
-            return float(norm_range[0])
-        alpha = (clamped_angle - min_angle) / (max_angle - min_angle)
-        low, high = norm_range
-        return low + alpha * (high - low)
+    # ── Helpers ───────────────────────────────────────────────────
 
     @staticmethod
     def _scale_color(color: dict[str, int], brightness: float) -> dict[str, int]:
         brightness = max(0.0, min(1.0, float(brightness)))
         return {
-            channel: max(0, min(255, int(round(int(value) * brightness))))
-            for channel, value in color.items()
+            "r": max(0, min(255, int(round(color["r"] * brightness)))),
+            "g": max(0, min(255, int(round(color["g"] * brightness)))),
+            "b": max(0, min(255, int(round(color["b"] * brightness)))),
         }
-
-    def _load_calibration(self) -> dict | None:
-        calibration_path_value = self.lerobot_config.get("calibration_path")
-        if calibration_path_value:
-            calibration_path = Path(calibration_path_value).expanduser()
-        else:
-            robot_type = self.lerobot_config.get("robot_type", "so101_follower")
-            robot_id = self.lerobot_config.get("robot_id", "lamp_arm")
-            calibration_path = (
-                Path.home()
-                / ".cache"
-                / "huggingface"
-                / "lerobot"
-                / "calibration"
-                / "robots"
-                / str(robot_type)
-                / f"{robot_id}.json"
-            )
-
-        if not calibration_path.exists():
-            robot_type = self.lerobot_config.get("robot_type", "so101_follower")
-            robot_id = self.lerobot_config.get("robot_id", "lamp_arm")
-            raise RuntimeError(
-                "LeRobot calibration file not found.\n"
-                f"Expected: {calibration_path}\n"
-                "Run calibration on the Pi first, for example:\n"
-                f"  lerobot-calibrate --robot.type={robot_type} "
-                f"--robot.port={self.arm_config['serial']['port']} --robot.id={robot_id}"
-            )
-
-        with calibration_path.open("r", encoding="utf-8") as handle:
-            raw_calibration = json.load(handle)
-
-        if not isinstance(raw_calibration, dict):
-            raise RuntimeError(
-                f"Unexpected calibration file format in {calibration_path}: expected a JSON object."
-            )
-
-        remapped: dict = {}
-        missing_keys: list[str] = []
-        for joint_name, joint in self.joint_config.items():
-            calibration_name = str(joint.get("calibration_name", joint_name))
-            if calibration_name not in raw_calibration:
-                missing_keys.append(f"{joint_name} -> {calibration_name}")
-                continue
-            remapped[joint_name] = raw_calibration[calibration_name]
-
-        if missing_keys:
-            available = ", ".join(sorted(raw_calibration.keys()))
-            missing = ", ".join(missing_keys)
-            raise RuntimeError(
-                "Calibration file is missing expected motor names for this Lamp config.\n"
-                f"Missing mappings: {missing}\n"
-                f"Available calibration keys: {available}"
-            )
-
-        return remapped

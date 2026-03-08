@@ -3,98 +3,52 @@ device_name: Lamp
 device_type: lem_arm
 
 network:
-  ip: "192.168.1.101"
+  ip: "lamp-pi"
   ssh_user: pi
-  master_url: "http://192.168.1.10:8000"
+  master_url: "http://claude-master:8000"
 
-hardware:
-  lemp:
-    type: rgb_pwm
-    pins:
-      red: 17
-      green: 27
-      blue: 22
-    pwm_frequency: 1000
-    default_color:
-      r: 255
-      g: 180
-      b: 120
-    brightness_scale: 1.0
+# ── LED hardware ─────────────────────────────────────────────────
+led:
+  pins:
+    red: 17
+    green: 27
+    blue: 22
+  pwm_frequency: 1000
+  default_color:
+    r: 255
+    g: 180
+    b: 120
+  brightness_scale: 1.0
 
-  arm:
-    type: so101_feetech
-    lerobot:
-      robot_type: "so101_follower"
-      robot_id: "lamp_arm"
-      calibration_path: "/home/lamp/Desktop/calibration/lamp_arm.json"
-    motor_model: "sts3215"
-    norm_mode: "RANGE_M100_100"
-    serial:
-      port: "/dev/ttyACM0"
-      baud_rate: 1000000
-      timeout_s: 1.0
-    readback:
-      register: "Present_Position"
-      response_timeout_s: 2.0
-    motion:
-      raw_frame_ms: 60
-      min_raw_frames: 3
-      max_raw_frames: 8
-    joints:
-      base_yaw:
-        servo_id: 1
-        calibration_name: "shoulder_pan"
-        min_angle: 0
-        max_angle: 180
-        home_angle: 90
-        link_angle_offset_deg: 0
-      shoulder_pitch:
-        servo_id: 2
-        calibration_name: "shoulder_lift"
-        min_angle: 15
-        max_angle: 165
-        home_angle: 95
-        link_angle_offset_deg: 0
-      elbow:
-        servo_id: 3
-        calibration_name: "elbow_flex"
-        min_angle: 0
-        max_angle: 170
-        home_angle: 110
-        link_angle_offset_deg: 0
-      wrist_pitch:
-        servo_id: 4
-        calibration_name: "wrist_flex"
-        min_angle: 0
-        max_angle: 180
-        home_angle: 90
-        link_angle_offset_deg: 0
-      wrist_roll:
-        servo_id: 5
-        calibration_name: "wrist_roll"
-        min_angle: 0
-        max_angle: 180
-        home_angle: 90
-        link_angle_offset_deg: 0
-    geometry:
-      units: mm
-      base_height: 96.0
-      upper_arm_length: 118.0
-      forearm_length: 112.0
-      wrist_to_lemp: 58.0
-      tool_vertical_offset: 0.0
-      shoulder_zero_reference: horizontal_forward
-      elbow_zero_reference: straight_with_shoulder
-      wrist_zero_reference: inline_with_forearm
+# ── Arm hardware ─────────────────────────────────────────────────
+arm:
+  serial_port: "/dev/ttyACM0"
+  baud_rate: 1000000
+  motor_model: "sts3215"
+  # Joint names match LAMP_TASC / lerobot convention
+  joints:
+    shoulder_pan:
+      servo_id: 1
+    shoulder_lift:
+      servo_id: 2
+    elbow_flex:
+      servo_id: 3
+    wrist_flex:
+      servo_id: 4
+    wrist_roll:
+      servo_id: 5
 
+# ── Presets ──────────────────────────────────────────────────────
+# Joint values are in lerobot normalized units (-100 to 100).
+# Presets use the 5 LAMP_TASC joint names.
 presets:
   home:
     joints:
-      base_yaw: 90
-      shoulder_pitch: 95
-      elbow: 110
-      wrist_pitch: 90
-      wrist_roll: 90
+      shoulder_pan: 0
+      shoulder_lift: 0
+      elbow_flex: 0
+      wrist_flex: 0
+      wrist_roll: 0
     color:
       r: 255
       g: 180
@@ -102,11 +56,11 @@ presets:
     duration_ms: 1000
   focus:
     joints:
-      base_yaw: 90
-      shoulder_pitch: 78
-      elbow: 122
-      wrist_pitch: 82
-      wrist_roll: 90
+      shoulder_pan: 0
+      shoulder_lift: -20
+      elbow_flex: 15
+      wrist_flex: -10
+      wrist_roll: 0
     color:
       r: 90
       g: 160
@@ -114,11 +68,11 @@ presets:
     duration_ms: 1200
   relax:
     joints:
-      base_yaw: 90
-      shoulder_pitch: 110
-      elbow: 95
-      wrist_pitch: 105
-      wrist_roll: 90
+      shoulder_pan: 0
+      shoulder_lift: 20
+      elbow_flex: -15
+      wrist_flex: 15
+      wrist_roll: 0
     color:
       r: 255
       g: 150
@@ -126,11 +80,11 @@ presets:
     duration_ms: 1800
   alert:
     joints:
-      base_yaw: 90
-      shoulder_pitch: 70
-      elbow: 140
-      wrist_pitch: 70
-      wrist_roll: 90
+      shoulder_pan: 0
+      shoulder_lift: -30
+      elbow_flex: 30
+      wrist_flex: -25
+      wrist_roll: 0
     color:
       r: 255
       g: 40
@@ -138,11 +92,11 @@ presets:
     duration_ms: 500
   curious:
     joints:
-      base_yaw: 110
-      shoulder_pitch: 82
-      elbow: 126
-      wrist_pitch: 70
-      wrist_roll: 110
+      shoulder_pan: 20
+      shoulder_lift: -15
+      elbow_flex: 20
+      wrist_flex: -25
+      wrist_roll: 20
     color:
       r: 120
       g: 255
@@ -156,7 +110,7 @@ capabilities:
 
 actions:
   set_color:
-    description: "Set the LEMP RGB light color"
+    description: "Set the RGB light color"
     params:
       r: int
       g: int
@@ -166,12 +120,12 @@ actions:
     params:
       brightness: float
   set_joint_angles:
-    description: "Set all five SO-101 joint targets"
+    description: "Set all five joint targets"
     params:
-      base_yaw: float
-      shoulder_pitch: float
-      elbow: float
-      wrist_pitch: float
+      shoulder_pan: float
+      shoulder_lift: float
+      elbow_flex: float
+      wrist_flex: float
       wrist_roll: float
   move_to_preset:
     description: "Move the arm to a named preset pose"
