@@ -114,21 +114,26 @@ Deploy: `scp devices/mirror/{main.py,ws_client.py,agent.py,display.py,camera.py,
 Pi: `roverhost` / `100.97.253.17`, SSH: `rover@roverhost` (password: rover, key installed)
 Boot: `ssh rover@roverhost 'cd ~/Rover && MASTER_URL="http://claude-master:8000" ~/rover-venv/bin/python3 main.py --connect'`
 
-### Radio Device Runtime (audio + dial hardware working, no WS client yet)
+### Radio Device Runtime (deployed on Pi, tested end-to-end)
 
 | File | Purpose |
 |------|---------|
+| `devices/radio/ws_client.py` | WebSocket client: register, connect, heartbeat, auto-reconnect |
+| `devices/radio/agent.py` | LLM agent loop (Cerebras gpt-oss-120b), tools: `play`, `stop`, `spin_dial`, `done` |
+| `devices/radio/planner.py` | Regex planner for Layer 1 direct commands |
 | `devices/radio/brain.py` | Audio decision engine: routes requests to pre-recorded clips via OpenAI |
 | `devices/radio/config.yaml` | Hardware config (USB speaker, PCA9685 servo dial) |
-| `devices/radio/SOUL.md` | Radio personality |
-| `devices/radio/RASPi/main.py` | Pi entry point: `--loop` for interactive, CLI for single commands |
+| `devices/radio/SOUL.md` | Radio personality: Bumblebee — communicates through found audio clips |
+| `devices/radio/RASPi/main.py` | Pi entry point: `--connect` for WS runtime, `--loop` for interactive, CLI for single commands |
 | `devices/radio/RASPi/runtime.py` | Hardware executor: plays audio, triggers dial spins |
 | `devices/radio/RASPi/audio.py` | Local audio playback (mpg123/ffplay/cvlc) |
-| `devices/radio/RASPi/dial.py` | PCA9685 servo control for physical dial |
-| `devices/radio/Sounds/` | Audio asset library (29 pre-recorded clips) |
+| `devices/radio/RASPi/dial.py` | PCA9685 servo control for physical dial (requires adafruit-circuitpython-pca9685) |
+| `devices/radio/Sounds/` | Audio asset library (29 pre-recorded clips: 7 music A-G, 19 soundbites, 1 glitch) |
 
-Pi: `radiohost` / `100.119.150.35`
-Test: `python3 devices/radio/RASPi/main.py "play calm morning music"`
+Pi: `radiohost` / `100.119.150.35`, SSH: `radio@radiohost` (password: radio)
+Venv: `~/radio-venv` (--system-site-packages), files in `~/Desktop/radio/`
+Boot: `ssh radio@radiohost 'cd ~/Desktop/radio/RASPi && MASTER_URL="http://claude-master:8000" ~/radio-venv/bin/python3 main.py --connect'`
+Deploy: `sshpass -p radio scp devices/radio/{brain.py,ws_client.py,agent.py,planner.py,SOUL.md,config.yaml} radio@radiohost:~/Desktop/radio/ && sshpass -p radio scp devices/radio/RASPi/main.py radio@radiohost:~/Desktop/radio/RASPi/`
 
 ### Networking
 
@@ -180,10 +185,11 @@ open http://localhost:8000       # Full-viewport room map with live device statu
 MASTER_MODEL=claude-sonnet-4-6   # Default. Options: claude-opus-4-6, gpt-oss-120b
 MASTER_PROVIDER=auto             # auto-detects from model name. Options: anthropic, cerebras
 
-# Device agents (lamp, mirror)
-CEREBRAS_API_KEY=csk-...         # REQUIRED for lamp/mirror LLM agent loops
+# Device agents (lamp, mirror, radio)
+CEREBRAS_API_KEY=csk-...         # REQUIRED for lamp/mirror/radio LLM agent loops
 LAMP_AGENT_MODEL=gpt-oss-120b   # Default. Cerebras model for lamp agent
 MIRROR_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
+RADIO_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for radio
 ```
 
 ### Data Files (gitignored, in `data/`)
@@ -195,7 +201,6 @@ MIRROR_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 
 ## What's Not Built Yet
 
-- **Radio WebSocket client** — Radio has audio + dial hardware working but no control plane integration (no ws_client.py)
 - **TTS** — ElevenLabs/Piper integration for Radio
 - **Tick scheduler** — periodic tick event generator (currently manual via curl)
 
@@ -211,7 +216,7 @@ MIRROR_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 - Lamp runtime on Pi (Cerebras gpt-oss-120b agent loop, arm + LED)
 - Mirror runtime on Pi (Cerebras agent + OpenAI gpt-image-1.5 for image gen/edit, picamera2, Pygame fullscreen)
 - Rover runtime on Pi (Cerebras agent, PID differential drive, encoder feedback)
-- Radio runtime on Pi (audio playback + servo dial, no WS client yet)
+- Radio runtime on Pi (Cerebras agent + brain.py audio routing, USB speaker + PCA9685 servo dial, Bumblebee personality)
 
 ## Design Principles
 
@@ -248,6 +253,11 @@ MIRROR_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 - **Mirror dotenv path** — main.py loads from local dir first (`_here / ".env"`), then project root. Same fix as rover.
 - **Rover SSH: `rover@roverhost`** — password `rover`, key installed.
 - **Rover motion.py encoder threads** — busy-loops with `time.sleep(0.0001)`. Don't import at startup; lazy-load when needed.
+- **Radio SSH: `radio@radiohost`** — password `radio`. Files deployed to `~/Desktop/radio/`, venv at `~/radio-venv`.
+- **Radio PCA9685 requires adafruit libs** — `adafruit-circuitpython-pca9685` and `adafruit-extended-bus` must be installed in venv. Without them, dial.py silently falls back to `enabled=False` (logs spins but doesn't drive hardware).
+- **Radio dial drifts after process kill** — PCA9685 holds residual PWM. Must explicitly `dial.stop(); dial.detach(); dial.close()` or power cycle to stop.
+- **Radio brain.py responses API returns 400** — falls back to chat.completions API automatically. Not a bug, just OpenAI responses API quirk.
+- **Radio files split across two dirs** — new integration files (ws_client, agent, planner) at `devices/radio/`, hardware files (runtime, audio, dial, config) at `devices/radio/RASPi/`. main.py adds both to sys.path.
 
 **Orchestrate, don't implement.** Delegate multi-file work to subagents (Task tool). Your context is for orchestration.
 
