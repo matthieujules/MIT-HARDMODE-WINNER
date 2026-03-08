@@ -65,6 +65,7 @@ class Encoder:
         pa, pb = self.pin_a, self.pin_b
         read = lgpio.gpio_read
         last_a, last_b = self.last_a, self.last_b
+        _sleep = time.sleep
 
         while self._running:
             a = read(chip, pa)
@@ -77,6 +78,7 @@ class Encoder:
                 last_b = b
             self.last_a = last_a
             self.last_b = last_b
+            _sleep(0.0001)  # 100us — prevents 100% CPU while still tracking fast enough
 
     def read(self):
         return self.count

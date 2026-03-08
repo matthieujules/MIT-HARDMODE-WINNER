@@ -34,25 +34,26 @@ Only the `.mmd` sources are tracked. Rendered exports should be treated as dispo
 | `control_plane/SOUL.md` | Master home personality, multi-person rules, tool-use rules |
 | `requirements.txt` | Python dependencies |
 
-### Lamp Device Runtime (fully working, tested end-to-end)
+### Lamp Device Runtime (fully working, arm + LED tested end-to-end on real hardware)
 
 | File | Purpose |
 |------|---------|
 | `devices/lamp/main.py` | Entry point: `--connect` for WS runtime, CLI sim mode preserved |
 | `devices/lamp/ws_client.py` | WebSocket client: register, connect, heartbeat, auto-reconnect |
-| `devices/lamp/agent.py` | LLM agent loop (Cerebras gpt-oss-120b), tool execution, warmup |
-| `devices/lamp/hardware.py` | Hardware controller (SO-101 arm + RGB LED via lerobot), sim mode auto-detected |
-| `devices/lamp/planner.py` | Regex planner for direct commands (used by ws_client Layer 1) |
-| `devices/lamp/LED_control.py` | RPi.GPIO PWM RGB LED driver |
-| `devices/lamp/compat.py` | lerobot Feetech servo bus factory (`make_bus()`) |
-| `devices/lamp/calibrate.py` | Servo calibration utility |
-| `devices/lamp/move.py` | Direct servo movement CLI |
-| `devices/lamp/record.py` | Pose recording utility |
-| `devices/lamp/play_animation.py` | Replay recorded pose sequences |
-| `devices/lamp/test_led.py` | LED test sequences (red, green, blue, sine, rainbow) |
+| `devices/lamp/agent.py` | LLM agent loop (Cerebras gpt-oss-120b), tools: `pose`, `set_color`, `set_brightness`, `flash`, `pulse`, `done` |
+| `devices/lamp/hardware.py` | Hardware controller: lerobot Robot API for arm (smooth interpolation), LED_control for RGB LED |
+| `devices/lamp/planner.py` | Simplified regex planner for Layer 1 direct commands (COLOR_MAP, POSE_HINTS) |
+| `devices/lamp/LED_control.py` | lgpio PWM RGB LED driver (GPIO 17/27/22) |
+| `devices/lamp/poses.json` | Recorded poses — on Pi only. Tools built dynamically from this file (no code changes needed to add poses) |
+| `devices/lamp/move.py` | Direct servo movement CLI (standalone utility) |
+| `devices/lamp/record.py` | Pose recording utility (standalone) |
+| `devices/lamp/play_animation.py` | Replay recorded pose sequences (standalone) |
+| `devices/lamp/test_led.py` | LED test sequences (standalone) |
+| `devices/lamp/test_hardware.py` | Standalone hardware test script for Pi |
 | `devices/lamp/sync.sh` | rsync deploy script for Pi |
 
-Run: `cd devices/lamp && MASTER_URL="http://localhost:8000" python3 main.py --connect`
+Run on Pi: `ssh -f lamp@lamphost 'cd /home/lamp/Desktop/lamp && nohup /home/lamp/Desktop/venv/bin/python3 main.py --connect --live-serial > /tmp/lamp.log 2>&1 &'`
+Deploy: `cd devices/lamp && ./sync.sh`
 
 ### Voice Pipeline (sidecar)
 
@@ -187,6 +188,9 @@ MIRROR_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 - **Transcript debouncer buffers 1.5s** — test events via curl return "transcript buffered" immediately. Master reasoning fires async after the flush. Check master-log after 3-15s.
 - **Resetting state.json clears spatial positions** — if you wipe state, device positions disappear from the dashboard. Restore from room.json anchors.
 - **Emergency stop pattern is strict** — requires "stop stop", "stop all", "emergency stop", "freeze all", or "no no no". Single "stop" does NOT trigger it (was too sensitive with voice transcription).
+- **`gripper.pos` must be stripped from poses** — SO100FollowerConfig has 5 motors, no gripper. Passing `gripper.pos` causes `StopIteration` crash. `hardware.py` handles this automatically.
+- **Lamp hardware.py uses Robot API, NOT raw servo bus** — `compat.py` was deleted. The working path is `SO100FollowerConfig` + `make_robot_from_config()` + `robot.send_action()` with `.pos` suffix keys.
+- **Lamp poses are dynamic** — agent tools are built from `poses.json` at boot. To add a pose: `record.py save <name>` on Pi → restart lamp process. No code changes or redeployment needed.
 
 **Orchestrate, don't implement.** Delegate multi-file work to subagents (Task tool). Your context is for orchestration.
 

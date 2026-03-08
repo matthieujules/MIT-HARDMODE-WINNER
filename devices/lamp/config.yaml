@@ -7,7 +7,7 @@ network:
   ssh_user: pi
   master_url: "http://claude-master:8000"
 
-# ── LED hardware ─────────────────────────────────────────────────
+# -- LED hardware ----------------------------------------------------------
 led:
   pins:
     red: 17
@@ -20,88 +20,11 @@ led:
     b: 120
   brightness_scale: 1.0
 
-# ── Arm hardware ─────────────────────────────────────────────────
+# -- Arm hardware ----------------------------------------------------------
 arm:
   serial_port: "/dev/ttyACM0"
   baud_rate: 1000000
   motor_model: "sts3215"
-  # Joint names match LAMP_TASC / lerobot convention
-  joints:
-    shoulder_pan:
-      servo_id: 1
-    shoulder_lift:
-      servo_id: 2
-    elbow_flex:
-      servo_id: 3
-    wrist_flex:
-      servo_id: 4
-    wrist_roll:
-      servo_id: 5
-
-# ── Presets ──────────────────────────────────────────────────────
-# Joint values are in lerobot normalized units (-100 to 100).
-# Presets use the 5 LAMP_TASC joint names.
-presets:
-  home:
-    joints:
-      shoulder_pan: 0
-      shoulder_lift: 0
-      elbow_flex: 0
-      wrist_flex: 0
-      wrist_roll: 0
-    color:
-      r: 255
-      g: 180
-      b: 120
-    duration_ms: 1000
-  focus:
-    joints:
-      shoulder_pan: 0
-      shoulder_lift: -20
-      elbow_flex: 15
-      wrist_flex: -10
-      wrist_roll: 0
-    color:
-      r: 90
-      g: 160
-      b: 255
-    duration_ms: 1200
-  relax:
-    joints:
-      shoulder_pan: 0
-      shoulder_lift: 20
-      elbow_flex: -15
-      wrist_flex: 15
-      wrist_roll: 0
-    color:
-      r: 255
-      g: 150
-      b: 90
-    duration_ms: 1800
-  alert:
-    joints:
-      shoulder_pan: 0
-      shoulder_lift: -30
-      elbow_flex: 30
-      wrist_flex: -25
-      wrist_roll: 0
-    color:
-      r: 255
-      g: 40
-      b: 40
-    duration_ms: 500
-  curious:
-    joints:
-      shoulder_pan: 20
-      shoulder_lift: -15
-      elbow_flex: 20
-      wrist_flex: -25
-      wrist_roll: 20
-    color:
-      r: 120
-      g: 255
-      b: 180
-    duration_ms: 900
 
 capabilities:
   - arm
@@ -109,6 +32,10 @@ capabilities:
   - emote
 
 actions:
+  pose:
+    description: "Move the arm to a named pose or play an animation"
+    params:
+      name: str
   set_color:
     description: "Set the RGB light color"
     params:
@@ -119,22 +46,21 @@ actions:
     description: "Set overall light brightness (0.0-1.0)"
     params:
       brightness: float
-  set_joint_angles:
-    description: "Set all five joint targets"
+  flash:
+    description: "Flash a color briefly then return to previous"
     params:
-      shoulder_pan: float
-      shoulder_lift: float
-      elbow_flex: float
-      wrist_flex: float
-      wrist_roll: float
-  move_to_preset:
-    description: "Move the arm to a named preset pose"
+      r: int
+      g: int
+      b: int
+      duration_ms: int
+  pulse:
+    description: "Pulse/breathe effect with a color"
     params:
-      preset: "home|focus|relax|alert|curious"
-  emote:
-    description: "Express an emotion through arm pose and light together"
-    params:
-      emotion: str
+      r: int
+      g: int
+      b: int
+      cycles: int
+      period_ms: int
   reset_pose:
     description: "Return to the home pose"
     params: {}

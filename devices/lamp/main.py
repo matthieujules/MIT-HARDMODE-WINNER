@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--live-serial",
         action="store_true",
-        help="Send the resulting payload to the configured serial port instead of simulating.",
+        help="Use real hardware instead of simulating.",
     )
     parser.add_argument(
         "--connect",
@@ -54,21 +54,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def print_banner(config: dict, simulate: bool) -> None:
-    serial_port = config["hardware"]["arm"]["serial"]["port"]
-    pins = config["hardware"]["lemp"]["pins"]
-    print("Lamp / LEM arm simulator")
-    print(f"Mode: {'simulation' if simulate else 'live serial'}")
+    serial_port = config.get("arm", {}).get("serial_port", "/dev/ttyACM0")
+    led_pins = config.get("led", {}).get("pins", {})
+    print("Lamp / LEM arm runtime")
+    print(f"Mode: {'simulation' if simulate else 'live hardware'}")
     print(f"Config: {config['device_name']} ({config['device_id']})")
     print(f"SO-101 serial port: {serial_port}")
-    print(
-        "LEMP PWM pins: "
-        f"R={pins['red']} G={pins['green']} B={pins['blue']}"
-    )
-    print(
-        "Type joint commands like "
-        "'base 120 shoulder 80 elbow 130 wrist 70 roll 110 blue'."
-    )
-    print("Type 'focus', 'relax', 'alert', or 'home' for presets.")
+    if led_pins:
+        print(
+            "LED PWM pins: "
+            f"R={led_pins.get('red', '?')} G={led_pins.get('green', '?')} B={led_pins.get('blue', '?')}"
+        )
+    print("Type pose names like 'home', 'look_at_user', or color names.")
     print("Type 'quit' to exit.")
 
 
@@ -77,29 +74,35 @@ def process_instruction(
     planner: InstructionPlanner,
     controller: LEMHardwareController,
 ) -> None:
-    plan = planner.plan(
-        instruction=instruction,
-        current_joints=controller.current_joints,
-        current_color=controller.current_color,
-    )
+    # Try pose detection
+    pose_name = planner.detect_pose(instruction)
+    if pose_name and pose_name in controller.poses:
+        result = controller.move_to_pose(pose_name)
+        print(f"  {result}")
+        return
 
-    print("\nPLAN")
-    print(f"Instruction: {plan.raw_instruction}")
-    if plan.preset:
-        print(f"Preset: {plan.preset}")
-    print(f"Joints: {format_joint_map(plan.joints)}")
-    print(f"Color: {plan.color} @ brightness={plan.brightness}")
-    if plan.light_frames:
-        print(f"Light frames: {plan.light_frames}")
-    print(f"Duration: {plan.duration_ms} ms")
-    print(f"Notes: {', '.join(plan.notes)}")
+    # Try color detection
+    color = planner.parse_color(instruction)
+    if color:
+        controller.set_color(color["r"], color["g"], color["b"])
+        print(f"  Color set to R={color['r']} G={color['g']} B={color['b']}")
+        return
 
-    payload = controller.apply_plan(plan)
-    print(f"Pose preview mm: {payload['pose_preview_mm']}\n")
+    # Try brightness
+    brightness = planner.parse_brightness(instruction)
+    if brightness is not None:
+        controller.set_brightness(brightness)
+        print(f"  Brightness set to {brightness}")
+        return
 
+    # Try direct pose name
+    if instruction.strip() in controller.poses:
+        result = controller.move_to_pose(instruction.strip())
+        print(f"  {result}")
+        return
 
-def format_joint_map(joints: dict[str, float]) -> str:
-    return ", ".join(f"{name}={round(value, 2)}" for name, value in joints.items())
+    print(f"  Unknown instruction: {instruction}")
+    print(f"  Available poses: {', '.join(controller.get_pose_names())}")
 
 
 def main() -> int:
@@ -107,7 +110,7 @@ def main() -> int:
     config = load_config(args.config.resolve())
     simulate = not args.live_serial
 
-    # ── WebSocket runtime mode ────────────────────────────────────
+    # -- WebSocket runtime mode --------------------------------------------
     if args.connect:
         from ws_client import run_ws_client
 
@@ -122,7 +125,7 @@ def main() -> int:
             print("\nLamp runtime stopped.")
         return 0
 
-    # ── CLI simulator mode (original) ─────────────────────────────
+    # -- CLI simulator mode (original) -------------------------------------
     planner = InstructionPlanner(config)
     controller = LEMHardwareController(config, simulate=simulate)
 

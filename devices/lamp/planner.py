@@ -1,6 +1,11 @@
+"""Regex planner for Layer 1 direct commands.
+
+The InstructionPlanner is used by ws_client.py for direct (non-LLM) command
+handling. The agent.py now handles all LLM-based decisions directly.
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import re
 
 
@@ -17,150 +22,65 @@ COLOR_MAP = {
     "cyan": {"r": 0, "g": 255, "b": 255},
 }
 
-JOINT_ALIASES = {
-    "base": "shoulder_pan",
-    "base_yaw": "shoulder_pan",
-    "yaw": "shoulder_pan",
-    "shoulder_pan": "shoulder_pan",
-    "shoulder": "shoulder_lift",
-    "shoulder_lift": "shoulder_lift",
-    "shoulder_pitch": "shoulder_lift",
-    "elbow": "elbow_flex",
-    "elbow_flex": "elbow_flex",
-    "wrist": "wrist_flex",
-    "wrist_flex": "wrist_flex",
-    "wrist_pitch": "wrist_flex",
-    "wristpitch": "wrist_flex",
-    "pitch": "wrist_flex",
-    "roll": "wrist_roll",
-    "wrist_roll": "wrist_roll",
-    "wristroll": "wrist_roll",
-}
-
-PRESET_HINTS = {
-    "focus": "focus",
-    "lock in": "focus",
-    "relax": "relax",
-    "calm": "relax",
-    "alert": "alert",
-    "warning": "alert",
-    "curious": "curious",
-    "inspect": "curious",
+# Map text hints to pose names (used by Layer 1 planner)
+POSE_HINTS = {
+    "focus": "home",      # will be overridden if pose exists
+    "lock in": "home",
+    "relax": "home",
+    "calm": "home",
+    "alert": "home",
+    "warning": "home",
+    "curious": "look_at_user",
+    "inspect": "look_at_user",
     "home": "home",
     "reset": "home",
-    "look at user": "curious",
-    "look_at_user": "curious",
+    "look at user": "look_at_user",
+    "look_at_user": "look_at_user",
 }
-
-
-@dataclass
-class ArmPlan:
-    raw_instruction: str
-    joints: dict[str, float]
-    color: dict[str, int]
-    brightness: float
-    duration_ms: int
-    light_frames: list[tuple[int, int, int, int]] = field(default_factory=list)
-    preset: str | None = None
-    notes: list[str] = field(default_factory=list)
 
 
 class InstructionPlanner:
+    """Regex-based planner for Layer 1 direct commands.
+
+    Used by ws_client.py handle_command() for quick non-LLM responses.
+    """
+
     def __init__(self, config: dict):
         self.config = config
-        self.presets = config.get("presets", {})
-        self.joint_names = tuple(config["arm"]["joints"].keys())
 
-    def plan(self, instruction: str, current_joints: dict[str, float], current_color: dict[str, int]) -> ArmPlan:
-        text = instruction.strip()
-        lowered = text.lower()
-
-        preset_name = self._detect_preset(lowered)
-        notes: list[str] = []
-
-        base_joints = dict(current_joints)
-        base_color = dict(current_color)
-        duration_ms = 1000
-
-        if preset_name:
-            preset = self.presets[preset_name]
-            base_joints.update({name: float(value) for name, value in preset["joints"].items()})
-            base_color.update({channel: int(value) for channel, value in preset["color"].items()})
-            duration_ms = int(preset.get("duration_ms", duration_ms))
-            notes.append(f"matched preset '{preset_name}'")
-
-        explicit_joints = self._parse_joint_angles(lowered)
-        if explicit_joints:
-            base_joints.update(explicit_joints)
-            notes.append("applied explicit joint angles from instruction")
-
-        explicit_color = self._parse_color(lowered)
-        if explicit_color:
-            base_color.update(explicit_color)
-            notes.append("applied explicit RGB/color override")
-
-        explicit_frames = self._parse_light_frames(lowered)
-        if explicit_frames:
-            notes.append("applied explicit RGB frame animation")
-
-        brightness = self._parse_brightness(lowered)
-        if brightness is None:
-            brightness = float(self.config.get("led", {}).get("brightness_scale", 1.0))
-        else:
-            notes.append("applied explicit brightness override")
-
-        explicit_duration = self._parse_duration_ms(lowered)
-        if explicit_duration is not None:
-            duration_ms = explicit_duration
-            notes.append("applied explicit duration override")
-
-        if not notes:
-            notes.append("no strong keyword matched, using current pose/light state")
-
-        return ArmPlan(
-            raw_instruction=text,
-            joints=base_joints,
-            color=base_color,
-            light_frames=explicit_frames,
-            brightness=brightness,
-            duration_ms=duration_ms,
-            preset=preset_name,
-            notes=notes,
-        )
-
-    def _detect_preset(self, lowered: str) -> str | None:
-        for hint, preset_name in PRESET_HINTS.items():
-            if hint in lowered and preset_name in self.presets:
-                return preset_name
+    def detect_pose(self, text: str) -> str | None:
+        """Detect a pose name from text. Returns pose name or None."""
+        lowered = text.strip().lower()
+        for hint, pose_name in POSE_HINTS.items():
+            if hint in lowered:
+                return pose_name
         return None
 
-    def _parse_joint_angles(self, lowered: str) -> dict[str, float]:
-        matches: dict[str, float] = {}
-        pattern = re.compile(
-            r"\b(shoulder_pan|shoulder_lift|elbow_flex|wrist_flex|wrist_roll|base_yaw|base|yaw|shoulder_pitch|shoulder|elbow|wrist_pitch|wristpitch|wrist|roll|wristroll|pitch)\s*(?:to|at|=|:)?\s*(-?\d+(?:\.\d+)?)\b"
-        )
-        for alias, value in pattern.findall(lowered):
-            matches[JOINT_ALIASES[alias]] = float(value)
-        return matches
+    def parse_color(self, text: str) -> dict[str, int] | None:
+        """Parse a color from text. Returns {r, g, b} or None."""
+        lowered = text.strip().lower()
 
-    def _parse_color(self, lowered: str) -> dict[str, int] | None:
+        # Try RGB(r, g, b) format
         rgb_match = re.search(
             r"\brgb\s*\(?\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*\)?",
             lowered,
         )
         if rgb_match:
             return {
-                "r": self._clamp_rgb(int(rgb_match.group(1))),
-                "g": self._clamp_rgb(int(rgb_match.group(2))),
-                "b": self._clamp_rgb(int(rgb_match.group(3))),
+                "r": _clamp_rgb(int(rgb_match.group(1))),
+                "g": _clamp_rgb(int(rgb_match.group(2))),
+                "b": _clamp_rgb(int(rgb_match.group(3))),
             }
 
+        # Try named colors
         for color_name in sorted(COLOR_MAP, key=len, reverse=True):
             if color_name in lowered:
                 return dict(COLOR_MAP[color_name])
         return None
 
-    def _parse_brightness(self, lowered: str) -> float | None:
+    def parse_brightness(self, text: str) -> float | None:
+        """Parse brightness from text. Returns 0.0-1.0 or None."""
+        lowered = text.strip().lower()
         scalar_match = re.search(r"\bbrightness\s*(?:to|at|=|:)?\s*(0(?:\.\d+)?|1(?:\.0+)?)\b", lowered)
         if scalar_match:
             return max(0.0, min(1.0, float(scalar_match.group(1))))
@@ -171,33 +91,6 @@ class InstructionPlanner:
             return round(percent / 100.0, 3)
         return None
 
-    def _parse_light_frames(self, lowered: str) -> list[tuple[int, int, int, int]]:
-        matches = re.findall(
-            r"(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,5})",
-            lowered,
-        )
-        frames: list[tuple[int, int, int, int]] = []
-        for r_value, g_value, b_value, t_value in matches:
-            frames.append(
-                (
-                    self._clamp_rgb(int(r_value)),
-                    self._clamp_rgb(int(g_value)),
-                    self._clamp_rgb(int(b_value)),
-                    max(0, int(t_value)),
-                )
-            )
-        return frames
 
-    def _parse_duration_ms(self, lowered: str) -> int | None:
-        seconds_match = re.search(r"\b(?:duration|over|for)\s*(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?\b", lowered)
-        if seconds_match:
-            return max(100, int(float(seconds_match.group(1)) * 1000))
-
-        ms_match = re.search(r"\b(?:duration|over|for)\s*(\d{2,5})\s*ms\b", lowered)
-        if ms_match:
-            return max(100, int(ms_match.group(1)))
-        return None
-
-    @staticmethod
-    def _clamp_rgb(value: int) -> int:
-        return max(0, min(255, value))
+def _clamp_rgb(value: int) -> int:
+    return max(0, min(255, value))

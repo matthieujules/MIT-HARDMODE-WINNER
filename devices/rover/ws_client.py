@@ -1,4 +1,4 @@
-"""WebSocket client runtime for the Lamp device.
+"""WebSocket client runtime for the Rover device.
 
 Boot sequence:
 1. Load config.yaml
@@ -26,8 +26,7 @@ import yaml
 import websockets
 import websockets.exceptions
 
-from hardware import LEMHardwareController
-from planner import COLOR_MAP, InstructionPlanner
+from planner import plan_command
 from agent import run_agent_loop
 
 logger = logging.getLogger(__name__)
@@ -54,7 +53,23 @@ def _ws_url(base_url: str, device_id: str) -> str:
     return f"{ws_base.rstrip('/')}/ws/{device_id}"
 
 
-# -- Registration ----------------------------------------------------------
+# -- Motion module (with sim fallback) ----------------------------------------
+
+_motion = None
+
+def _get_motion():
+    """Lazy-load motion module. Returns None if not on Pi hardware."""
+    global _motion
+    if _motion is None:
+        try:
+            import motion as m
+            _motion = m
+        except Exception:
+            pass
+    return _motion
+
+
+# -- Registration --------------------------------------------------------------
 
 
 def register_device(config: dict) -> bool:
@@ -62,16 +77,13 @@ def register_device(config: dict) -> bool:
     base_url = _master_url(config)
     url = f"{base_url.rstrip('/')}/register"
 
-    actions = list(config.get("actions", {}).keys())
-    capabilities = config.get("capabilities", [])
-
     body = {
         "device_id": config["device_id"],
         "device_name": config["device_name"],
         "device_type": config["device_type"],
-        "capabilities": capabilities,
-        "actions": actions,
-        "ip": config["network"]["ip"],
+        "capabilities": config.get("capabilities", []),
+        "actions": list(config.get("actions", {}).keys()),
+        "ip": config["network"].get("tailscale_hostname", config["network"].get("ip", "rover-pi")),
     }
 
     data = json.dumps(body).encode("utf-8")
@@ -95,94 +107,65 @@ def register_device(config: dict) -> bool:
         return False
 
 
-# -- Command handling (Layer 1) --------------------------------------------
+# -- Command handling (Layer 1) ------------------------------------------------
 
 
 def handle_command(
     action: str,
     params: dict[str, Any],
-    hw: LEMHardwareController,
-    planner: InstructionPlanner,
 ) -> dict[str, Any]:
     """Execute a direct command and return rich result dict."""
     start_time = time.monotonic()
+    motion = _get_motion()
+
     try:
-        if action == "set_color":
-            # Support both named colors (from router) and explicit RGB
-            _COLOR_ALIASES = {"warm": "warm white", "cool": "cyan"}
-            color_name = params.get("color", "").lower()
-            color_name = _COLOR_ALIASES.get(color_name, color_name)
-            if color_name and color_name in COLOR_MAP:
-                color = dict(COLOR_MAP[color_name])
-            else:
-                color = {
-                    "r": int(params.get("r", 255)),
-                    "g": int(params.get("g", 180)),
-                    "b": int(params.get("b", 120)),
-                }
-            hw.set_color(color["r"], color["g"], color["b"])
-            detail = f"set_color to R={color['r']} G={color['g']} B={color['b']}"
+        if action == "move":
+            distance_cm = float(params.get("distance_cm", 0))
+            speed = int(params.get("speed", 40))
+            if motion is not None:
+                motion.move(distance_cm, speed)
+            detail = f"move {distance_cm}cm at speed {speed}"
 
-        elif action == "set_brightness":
-            raw_brightness = float(params.get("brightness", 1.0))
-            # Router sends 0-100 integer, normalize to 0.0-1.0
-            brightness = raw_brightness / 100.0 if raw_brightness > 1.0 else raw_brightness
-            hw.set_brightness(brightness)
-            detail = f"set_brightness to {brightness}"
+        elif action == "rotate":
+            degrees = float(params.get("degrees", 0))
+            speed = int(params.get("speed", 40))
+            if motion is not None:
+                motion.rotate(degrees, speed)
+            detail = f"rotate {degrees} degrees at speed {speed}"
 
-        elif action == "pose":
-            pose_name = str(params.get("name", "home"))
-            result = hw.move_to_pose(pose_name)
-            detail = result
-
-        elif action == "flash":
-            r = int(params.get("r", 255))
-            g = int(params.get("g", 255))
-            b = int(params.get("b", 255))
-            duration_ms = int(params.get("duration_ms", 500))
-            hw.flash(r, g, b, duration_ms)
-            detail = f"flash R={r} G={g} B={b} for {duration_ms}ms"
-
-        elif action == "pulse":
-            r = int(params.get("r", 255))
-            g = int(params.get("g", 255))
-            b = int(params.get("b", 255))
-            cycles = int(params.get("cycles", 3))
-            period_ms = int(params.get("period_ms", 800))
-            hw.pulse(r, g, b, cycles, period_ms)
-            detail = f"pulse R={r} G={g} B={b} for {cycles} cycles"
-
-        elif action == "reset_pose" or action == "stop":
-            result = hw.move_to_pose("home")
-            detail = f"{action} -- {result}"
-
-        # Legacy actions for backward compatibility with control plane
-        elif action == "move_to_preset":
-            preset = str(params.get("preset", "home"))
-            # Map old preset names to pose names
-            pose_name = planner.detect_pose(preset) or "home"
-            result = hw.move_to_pose(pose_name)
-            detail = f"move_to_preset '{preset}' -> {result}"
+        elif action == "stop":
+            if motion is not None:
+                motion.stop()
+            detail = "stopped all motors"
 
         elif action == "emote":
-            emotion = str(params.get("emotion", "curious"))
-            pose_name = planner.detect_pose(emotion) or "home"
-            result = hw.move_to_pose(pose_name)
-            detail = f"emote '{emotion}' -> {result}"
+            emotion = str(params.get("emotion", "excitement"))
+            if motion is not None:
+                if emotion == "excitement":
+                    motion.excitement()
+                elif emotion == "sad":
+                    motion.act_sad()
+                elif emotion == "ponder":
+                    motion.say_no()
+                elif emotion == "deliver":
+                    motion.pass_food()
+                else:
+                    return {"status": "error", "detail": f"unknown emotion: {emotion}", "layer": "command"}
+            detail = f"emote '{emotion}'"
 
         else:
             logger.warning("Unknown command action: %s", action)
             return {"status": "error", "detail": f"unknown action: {action}", "layer": "command"}
 
         elapsed = time.monotonic() - start_time
+        sim_note = " (sim)" if motion is None else ""
         return {
             "status": "ok",
-            "detail": detail,
+            "detail": f"{detail}{sim_note}",
             "layer": "command",
             "action": action,
             "params": params,
             "elapsed_ms": round(elapsed * 1000),
-            "hw_state": {"joints": dict(hw.current_joints), "color": dict(hw.current_color)},
         }
 
     except Exception as e:
@@ -197,7 +180,7 @@ def handle_command(
         }
 
 
-# -- WebSocket loop --------------------------------------------------------
+# -- WebSocket loop ------------------------------------------------------------
 
 
 async def _send_action_result(
@@ -206,11 +189,7 @@ async def _send_action_result(
     request_id: str,
     result: dict[str, Any],
 ) -> None:
-    """Send an action_result event back to the control plane.
-
-    result must have at least 'status' and 'detail'. May also include
-    'execution_log', 'iterations', 'elapsed_ms', 'hw_state', 'mode'.
-    """
+    """Send an action_result event back to the control plane."""
     msg = {
         "device_id": device_id,
         "kind": "action_result",
@@ -257,8 +236,6 @@ async def _handle_message(
     msg_data: dict,
     ws: websockets.WebSocketClientProtocol,
     device_id: str,
-    hw: LEMHardwareController,
-    planner: InstructionPlanner,
 ) -> None:
     """Route a single incoming message by type."""
     msg_type = msg_data.get("type")
@@ -269,8 +246,14 @@ async def _handle_message(
         params = msg_data.get("params", {})
         logger.info("Received command: %s(%s) request_id=%s", action, params, request_id)
 
+        # Try planner for Layer 1 direct routing
+        planned = plan_command(action, params)
+        if planned is not None:
+            action = planned["action"]
+            params = planned.get("params", params)
+
         # Run command in a thread to avoid blocking the event loop
-        result = await asyncio.to_thread(handle_command, action, params, hw, planner)
+        result = await asyncio.to_thread(handle_command, action, params)
         await _send_action_result(ws, device_id, request_id, result)
 
     elif msg_type == "spawn":
@@ -279,11 +262,10 @@ async def _handle_message(
         time_budget_ms = msg_data.get("time_budget_ms", 45000)
         logger.info("Received spawn: %r request_id=%s", instruction[:80], request_id)
 
-        # Run agent loop in a thread (it may do blocking LLM calls)
+        # Run agent loop in a thread (it may do blocking LLM calls + motor ops)
         result = await asyncio.to_thread(
             run_agent_loop,
             instruction,
-            hw,
             max_iterations,
             time_budget_ms,
         )
@@ -295,11 +277,7 @@ async def _handle_message(
         logger.warning("Unknown message type: %s", msg_type)
 
 
-async def _ws_session(
-    config: dict,
-    hw: LEMHardwareController,
-    planner: InstructionPlanner,
-) -> None:
+async def _ws_session(config: dict) -> None:
     """Run a single WebSocket session until disconnected or errored."""
     device_id = config["device_id"]
     base_url = _master_url(config)
@@ -322,10 +300,9 @@ async def _ws_session(
                     continue
 
                 try:
-                    await _handle_message(msg_data, ws, device_id, hw, planner)
+                    await _handle_message(msg_data, ws, device_id)
                 except Exception as e:
                     logger.error("Error handling message: %s", e, exc_info=True)
-                    # Send error result if we have a request_id
                     request_id = msg_data.get("request_id", "unknown")
                     await _send_action_result(ws, device_id, request_id, {
                         "status": "error", "detail": str(e),
@@ -341,11 +318,9 @@ async def _ws_session(
 async def run_ws_client(config: dict, simulate: bool = True) -> None:
     """Main entry point: register, connect, and run the WS loop with auto-reconnect."""
     device_id = config["device_id"]
-    hw = LEMHardwareController(config, simulate=simulate)
-    planner = InstructionPlanner(config)
 
     logger.info(
-        "Lamp runtime starting: device_id=%s simulate=%s master=%s",
+        "Rover runtime starting: device_id=%s simulate=%s master=%s",
         device_id,
         simulate,
         _master_url(config),
@@ -368,7 +343,7 @@ async def run_ws_client(config: dict, simulate: bool = True) -> None:
     backoff = RECONNECT_BASE_S
     while True:
         try:
-            await _ws_session(config, hw, planner)
+            await _ws_session(config)
             # Clean disconnect -- still reconnect
             logger.info("WebSocket disconnected cleanly, reconnecting...")
             backoff = RECONNECT_BASE_S
