@@ -65,8 +65,9 @@ Characters: Tom (lives here, made dinner, waiting). Lucy (his date, arrives late
 - mirror: "Warm golden ambient visual. Soft honey tones, beautiful. Use display tool."
 
 ### Beat 11 — "deserve that"
-- rover: "Deliver bread — use deliver emote."
+- lamp: "Set color warm pink (255, 40, 80), full brightness 1.0. look_at_user pose."
 - radio: "Play clip I (Careless Whisper) for 20s. The romantic song returns one final time."
+- mirror: "Show the Romantic Rose Petals Date image. Use show_preset, NOT display."
 
 ### Beat 12 — "spaghetti" or "meatballs"
 - lamp: "Focus warm amber (255, 180, 60) light on the dish. Intimate dining glow. Brightness 0.9."

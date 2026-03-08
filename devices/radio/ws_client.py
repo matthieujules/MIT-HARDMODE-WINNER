@@ -273,7 +273,7 @@ async def _handle_message(
     runtime: Any,
 ) -> None:
     """Route a single incoming message by type."""
-    global _active_spawn_task
+    global _active_spawn_task, _active_cancel_event
     msg_type = msg_data.get("type")
     request_id = msg_data.get("request_id", "unknown")
 

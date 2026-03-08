@@ -37,6 +37,32 @@ MIRROR_AGENT_MODEL = os.environ.get("MIRROR_AGENT_MODEL", "gpt-oss-120b")
 LLM_CALL_TIMEOUT_S = 30
 
 SOUL_PATH = Path(__file__).resolve().with_name("SOUL.md")
+IMAGES_DIR = Path(__file__).resolve().with_name("images")
+
+# ── Preset image catalog (built from images/ directory) ──────────
+
+def _scan_presets() -> dict[str, Path]:
+    """Scan images/ directory and build name→path mapping.
+
+    Filenames like '01_outfit selection white scarf.png' become
+    'outfit selection white scarf' (strip number prefix, strip extension).
+    """
+    presets: dict[str, Path] = {}
+    if not IMAGES_DIR.is_dir():
+        return presets
+    for p in sorted(IMAGES_DIR.iterdir()):
+        if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"):
+            # Strip leading number + underscore: "01_Foo Bar.png" → "Foo Bar"
+            stem = p.stem
+            import re as _re
+            stem = _re.sub(r"^\d+[_\-\s]*", "", stem).strip()
+            if stem:
+                presets[stem] = p
+    return presets
+
+
+PRESET_CATALOG: dict[str, Path] = _scan_presets()
+logger.info("Preset images loaded: %s", list(PRESET_CATALOG.keys()))
 
 # ── Singleton client + cached soul ───────────────────────────────
 
@@ -173,6 +199,28 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "show_preset",
+            "description": (
+                "Show a pre-made image on the mirror display. These are high-quality "
+                "pre-rendered images — use them when they match the instruction instead "
+                "of generating a new image. Much faster than display or edit_photo."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the preset image to show",
+                        "enum": list(PRESET_CATALOG.keys()) if PRESET_CATALOG else ["(none available)"],
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "dismiss",
             "description": (
                 "Clear the display back to black (invisible behind the mirror). "
@@ -299,6 +347,16 @@ def _execute_tool_call(
                 f"Frame captured. Source: {frame.source}. "
                 f"Size: {frame.metadata.get('width', '?')}x{frame.metadata.get('height', '?')}"
             )
+
+        elif name == "show_preset":
+            preset_name = str(args.get("name", ""))
+            if preset_name not in PRESET_CATALOG:
+                available = ", ".join(PRESET_CATALOG.keys()) or "(none)"
+                return f"Error: unknown preset '{preset_name}'. Available: {available}"
+            from PIL import Image
+            preset_img = Image.open(PRESET_CATALOG[preset_name]).convert("RGB")
+            screen_path = display.show_generated(preset_img, ttl_s=120)
+            return f"Showing preset '{preset_name}' on display. Screen: {screen_path}. Call done() to finish."
 
         elif name == "show_original":
             if generator.last_original_path is None or not generator.last_original_path.exists():
