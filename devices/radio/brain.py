@@ -28,6 +28,8 @@ class SelectionDecision:
 	llm_token: str | None
 	source: str
 	llm_called: bool
+	final_tokens: tuple[str, ...] = ()
+	llm_tokens: tuple[str, ...] = ()
 
 
 def _load_choices() -> tuple[dict[str, AudioChoice], AudioChoice | None]:
@@ -113,6 +115,77 @@ def _sanitize_llm_token(raw: str, allowed: set[str]) -> str | None:
 			return token
 
 	return None
+
+
+def _sanitize_llm_tokens(raw: str, allowed: set[str], expected_count: int) -> tuple[str, ...] | None:
+	if expected_count <= 1:
+		single = _sanitize_llm_token(raw, allowed)
+		return (single,) if single is not None else None
+
+	text = (raw or "").strip().upper()
+	if not text:
+		return None
+
+	if re.search(r"\bSTOP\b", text):
+		return ("stop",)
+
+	int_to_allowed = {int(token): token for token in allowed if token.isdigit()}
+	parsed: list[str] = []
+	for token in re.findall(r"\d{1,2}|[A-G]|STOP", text):
+		if token == "STOP":
+			return ("stop",)
+		if token.isdigit():
+			canonical = int_to_allowed.get(int(token))
+			if canonical is not None:
+				parsed.append(canonical)
+		elif token in allowed:
+			parsed.append(token)
+
+	if len(parsed) >= expected_count:
+		first = parsed[0]
+		for token in parsed[1:]:
+			if token != first:
+				return (first, token)
+		alt = next((token for token in sorted(allowed, key=lambda item: int(item) if item.isdigit() else 999) if token != first), None)
+		if alt is not None:
+			return (first, alt)
+		return (first, first)
+	if len(parsed) == 1:
+		first = parsed[0]
+		alt = next((token for token in sorted(allowed, key=lambda item: int(item) if item.isdigit() else 999) if token != first), None)
+		if alt is not None:
+			return (first, alt)
+		return (first, first)
+	return None
+
+
+def _fallback_token_chain(fallback: str, allowed_codes: list[str], expected_count: int) -> tuple[str, ...]:
+	if expected_count <= 1:
+		return (fallback,)
+
+	numeric_codes = [code for code in allowed_codes if code.isdigit()]
+	if not numeric_codes:
+		return (fallback,)
+	if len(numeric_codes) == 1:
+		return (numeric_codes[0], numeric_codes[0])
+
+	if fallback in numeric_codes:
+		idx = numeric_codes.index(fallback)
+		return (numeric_codes[idx], numeric_codes[(idx + 1) % len(numeric_codes)])
+
+	return (numeric_codes[0], numeric_codes[1])
+
+
+def _build_non_repeating_pair(primary: str, allowed_codes: list[str]) -> tuple[str, str]:
+	numeric_codes = [code for code in allowed_codes if code.isdigit()]
+	if not numeric_codes:
+		return (primary, primary)
+	if len(numeric_codes) == 1:
+		return (numeric_codes[0], numeric_codes[0])
+	if primary in numeric_codes:
+		idx = numeric_codes.index(primary)
+		return (numeric_codes[idx], numeric_codes[(idx + 1) % len(numeric_codes)])
+	return (numeric_codes[0], numeric_codes[1])
 
 
 def _extract_output_text(response: Any) -> str:
@@ -224,6 +297,9 @@ def _phrase_override_token(request: str, choices: dict[str, AudioChoice]) -> str
 def _choose_code_with_llm(request: str, allowed_codes: list[str], choices: dict[str, AudioChoice]) -> SelectionDecision:
 	fallback = _choose_code_by_metadata(request, allowed_codes, choices)
 	allowed = set(allowed_codes)
+	numeric_only = bool(allowed_codes) and all(code.isdigit() for code in allowed_codes)
+	expected_count = 2 if numeric_only else 1
+	fallback_tokens = _fallback_token_chain(fallback, allowed_codes, expected_count)
 
 	api_key = os.getenv("OPENAI_API_KEY", "").strip()
 	if not api_key:
@@ -233,6 +309,7 @@ def _choose_code_with_llm(request: str, allowed_codes: list[str], choices: dict[
 			llm_token=None,
 			source="fallback:no_api_key",
 			llm_called=False,
+			final_tokens=fallback_tokens,
 		)
 
 	try:
@@ -244,6 +321,7 @@ def _choose_code_with_llm(request: str, allowed_codes: list[str], choices: dict[
 			llm_token=None,
 			source="fallback:openai_import_error",
 			llm_called=False,
+			final_tokens=fallback_tokens,
 		)
 
 	model = os.getenv("OPENAI_PLAN_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
@@ -251,10 +329,29 @@ def _choose_code_with_llm(request: str, allowed_codes: list[str], choices: dict[
 		f"- {code}: {choices.get(code).label if choices.get(code) else 'unknown option'}"
 		for code in allowed_codes
 	)
-	system_prompt = (
-		"You route radio requests to one exact token. "
-		"Return ONLY one token in strict format: an UPPERCASE letter A-G, or a numeric clip token (for example 03, 07, 19). "
-		"Do not return lowercase letters, punctuation, JSON, or extra words."
+	if numeric_only:
+		system_prompt = (
+			"You route radio requests to numeric clip tokens only. "
+			"Return ONLY two numeric clip tokens separated by a single space (for example 03 07 or 19 03). "
+			"Never repeat the same numeric token twice; the two numbers must be different whenever possible. "
+			"Do not return punctuation, JSON, lowercase text, or extra words."
+		)
+	else:
+		system_prompt = (
+			"You route radio requests to one exact token. "
+			"Return ONLY one token in strict format: an UPPERCASE letter A-G, or a numeric clip token (for example 03, 07, 19). "
+			"Do not return lowercase letters, punctuation, JSON, or extra words."
+		)
+
+	allowed_rule = (
+		"Output rule: respond with exactly two numeric tokens separated by one space, no explanation."
+		if numeric_only
+		else "Output rule: respond with exactly one token only, no explanation."
+	)
+	example_rule = (
+		"Examples of valid outputs: 03 07, 07 19, 19 03, STOP"
+		if numeric_only
+		else "Examples of valid outputs: A, C, 03, 07, 19, STOP"
 	)
 	user_prompt = (
 		f"Request: {request}\n"
@@ -267,8 +364,9 @@ def _choose_code_with_llm(request: str, allowed_codes: list[str], choices: dict[
 		"- if request means 'Interesting House you've got' (or close paraphrase) -> 03\n"
 		"- if request means 'hi/hello/hey' -> 09\n"
 		"Output STOP for explicit stop intents: stop, pause, hold.\n"
-		"Output rule: respond with exactly one token only, no explanation.\n"
-		"Examples of valid outputs: A, C, 03, 07, 19, STOP"
+		"Never repeat the same numeric token twice in numeric mode unless only one numeric file exists.\n"
+		f"{allowed_rule}\n"
+		f"{example_rule}"
 	)
 
 	client = OpenAI(api_key=api_key)
@@ -286,14 +384,17 @@ def _choose_code_with_llm(request: str, allowed_codes: list[str], choices: dict[
 			],
 		)
 		text = _extract_output_text(response)
-		parsed = _sanitize_llm_token(text, allowed)
-		if parsed is not None:
+		parsed_tokens = _sanitize_llm_tokens(text, allowed, expected_count)
+		if parsed_tokens is not None:
+			parsed_text = " ".join(parsed_tokens)
 			return SelectionDecision(
-				final_token=parsed,
+				final_token=parsed_tokens[0],
 				llm_raw_output=text,
-				llm_token=parsed,
+				llm_token=parsed_text,
 				source="llm:responses",
 				llm_called=True,
+				final_tokens=parsed_tokens,
+				llm_tokens=parsed_tokens,
 			)
 		return SelectionDecision(
 			final_token=fallback,
@@ -301,6 +402,7 @@ def _choose_code_with_llm(request: str, allowed_codes: list[str], choices: dict[
 			llm_token=None,
 			source="fallback:invalid_llm_output",
 			llm_called=True,
+			final_tokens=fallback_tokens,
 		)
 	except Exception as exc:
 		response_errors.append(f"responses:{exc}")
@@ -316,14 +418,17 @@ def _choose_code_with_llm(request: str, allowed_codes: list[str], choices: dict[
 			],
 		)
 		text = ((completion.choices[0].message.content or "") if completion.choices else "").strip()
-		parsed = _sanitize_llm_token(text, allowed)
-		if parsed is not None:
+		parsed_tokens = _sanitize_llm_tokens(text, allowed, expected_count)
+		if parsed_tokens is not None:
+			parsed_text = " ".join(parsed_tokens)
 			return SelectionDecision(
-				final_token=parsed,
+				final_token=parsed_tokens[0],
 				llm_raw_output=text,
-				llm_token=parsed,
+				llm_token=parsed_text,
 				source="llm:chat_completions",
 				llm_called=True,
+				final_tokens=parsed_tokens,
+				llm_tokens=parsed_tokens,
 			)
 		return SelectionDecision(
 			final_token=fallback,
@@ -331,6 +436,7 @@ def _choose_code_with_llm(request: str, allowed_codes: list[str], choices: dict[
 			llm_token=None,
 			source="fallback:invalid_llm_output",
 			llm_called=True,
+			final_tokens=fallback_tokens,
 		)
 	except Exception as exc:
 		response_errors.append(f"chat:{exc}")
@@ -342,6 +448,7 @@ def _choose_code_with_llm(request: str, allowed_codes: list[str], choices: dict[
 		llm_token=None,
 		source="fallback:llm_exception",
 		llm_called=True,
+		final_tokens=fallback_tokens,
 	)
 
 
@@ -354,12 +461,14 @@ def select_audio_decision(request: str) -> SelectionDecision:
 	"""
 	text = (request or "").strip()
 	if not text:
+		empty_pair = _build_non_repeating_pair("1", sorted([code for code, choice in _load_choices()[0].items() if choice.kind == "soundbite" and code.isdigit()], key=lambda item: int(item)))
 		return SelectionDecision(
-			final_token="1",
+			final_token=empty_pair[0],
 			llm_raw_output=None,
 			llm_token=None,
 			source="fallback:empty_request",
 			llm_called=False,
+			final_tokens=empty_pair,
 		)
 
 	if _is_stop_request(text):
@@ -369,6 +478,8 @@ def select_audio_decision(request: str) -> SelectionDecision:
 			llm_token="stop",
 			source="direct:stop_keyword",
 			llm_called=False,
+			final_tokens=("stop",),
+			llm_tokens=("stop",),
 		)
 
 	choices, _ = _load_choices()
@@ -376,12 +487,19 @@ def select_audio_decision(request: str) -> SelectionDecision:
 
 	override_token = _phrase_override_token(text, choices)
 	if override_token is not None:
+		numeric_codes = sorted(
+			[code for code, choice in choices.items() if choice.kind == "soundbite" and code.isdigit()],
+			key=lambda item: int(item),
+		)
+		override_pair = _build_non_repeating_pair(override_token, numeric_codes)
 		return SelectionDecision(
 			final_token=override_token,
 			llm_raw_output=f"[phrase-rule] {override_token}",
 			llm_token=override_token,
 			source="rule:phrase_override",
 			llm_called=False,
+			final_tokens=override_pair,
+			llm_tokens=override_pair,
 		)
 
 	if wants_music:
@@ -400,12 +518,19 @@ def select_audio_decision(request: str) -> SelectionDecision:
 	decision = _choose_code_with_llm(text, allowed_codes, choices)
 	if decision.final_token == "stop" and not _is_stop_request(text):
 		fallback = _choose_code_by_metadata(text, allowed_codes, choices)
+		fallback_tokens = _fallback_token_chain(
+			fallback,
+			allowed_codes,
+			2 if (allowed_codes and all(code.isdigit() for code in allowed_codes)) else 1,
+		)
 		return SelectionDecision(
 			final_token=fallback,
 			llm_raw_output=decision.llm_raw_output,
 			llm_token=decision.llm_token,
 			source="fallback:blocked_non_explicit_stop",
 			llm_called=decision.llm_called,
+			final_tokens=fallback_tokens,
+			llm_tokens=decision.llm_tokens,
 		)
 
 	return decision
@@ -461,7 +586,8 @@ def run_radio_command(command: str) -> dict[str, Any]:
 
 	pre_llm_glitch = _clip_entry(1, glitch) if glitch is not None else None
 	decision = select_audio_decision(request)
-	token = decision.final_token
+	selected_tokens = tuple(token for token in (decision.final_tokens or (decision.final_token,)) if token and token != "stop")
+	token = selected_tokens[0] if selected_tokens else decision.final_token
 
 	if token == "stop":
 		stop_clips = [pre_llm_glitch] if pre_llm_glitch else []
@@ -492,8 +618,13 @@ def run_radio_command(command: str) -> dict[str, Any]:
 			},
 		}
 
-	selected = choices.get(token)
-	if selected is None:
+	selected_choices: list[AudioChoice] = []
+	for selected_token in selected_tokens:
+		choice = choices.get(selected_token)
+		if choice is not None:
+			selected_choices.append(choice)
+
+	if not selected_choices:
 		wants_music = _is_explicit_music_request(request)
 		if wants_music:
 			fallback_codes = list(MUSIC_CODES)
@@ -502,14 +633,15 @@ def run_radio_command(command: str) -> dict[str, Any]:
 				[code for code, choice in choices.items() if choice.kind == "soundbite" and code.isdigit()],
 				key=lambda item: int(item),
 			)
-		selected = next((choices.get(code) for code in fallback_codes if code in choices), None)
-		if selected is None:
+		fallback_choice = next((choices.get(code) for code in fallback_codes if code in choices), None)
+		if fallback_choice is None:
 			return {
 				"ok": False,
 				"error": "No matching audio files found in Sounds folder for the required naming format.",
 				"command": request,
 				"selection": token,
 			}
+		selected_choices = [fallback_choice]
 
 	clips: list[dict[str, Any]] = []
 	next_index = 1
@@ -517,39 +649,45 @@ def run_radio_command(command: str) -> dict[str, Any]:
 		clips.append(pre_llm_glitch)
 		next_index += 1
 
-	clips.append(_clip_entry(next_index, selected))
-	next_index += 1
+	for idx, selected in enumerate(selected_choices):
+		clips.append(_clip_entry(next_index, selected))
+		next_index += 1
+		# Keep glitches between clips, but do not append one after the final clip.
+		if glitch is not None and idx < (len(selected_choices) - 1):
+			clips.append(_clip_entry(next_index, glitch))
+			next_index += 1
 
-	if glitch is not None:
-		clips.append(_clip_entry(next_index, glitch))
-
-	playback_type = "music" if selected.kind == "music" else "podcast"
+	primary_selection = selected_choices[0]
+	playback_type = "music" if primary_selection.kind == "music" else "podcast"
 	return {
 		"ok": True,
 		"command": request,
-		"selection": selected.code,
+		"selection": primary_selection.code,
 		"plan": {
 			"action": "output_podcast",
 			"turn_radio": True,
-			"selection": selected.code,
-			"category": selected.kind,
+			"selection": primary_selection.code,
+			"selection_chain": [choice.code for choice in selected_choices],
+			"category": primary_selection.kind,
 			"requires_explicit_music_keyword": True,
 		},
 		"execution": {
 			"llm_called": decision.llm_called,
 			"llm_decision": decision.llm_raw_output,
 			"llm_token": decision.llm_token,
-			"final_selection": selected.code,
+			"llm_tokens": list(decision.llm_tokens) if decision.llm_tokens else [],
+			"final_selection": primary_selection.code,
+			"final_selection_chain": [choice.code for choice in selected_choices],
 			"selection_source": decision.source,
 			"pre_llm_glitch": pre_llm_glitch,
-			"post_clip_glitch": _clip_entry(next_index, glitch) if glitch is not None else None,
+			"post_clip_glitch": None,
 			"clips_generated": clips,
 			"playback": {
 				"type": playback_type,
 				"status": "queued_local_files",
 				"audio_items": clips,
 				"audio_queue": [],
-				"message": "Glitch plays before LLM return path and after selected clip.",
+				"message": "Glitch plays before first clip and between selected clips only.",
 			},
 		},
 	}

@@ -3,8 +3,9 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 import httpx
 
@@ -15,12 +16,39 @@ class AudioPlaybackError(RuntimeError):
     pass
 
 
+class PlaybackInterrupted(AudioPlaybackError):
+    pass
+
+
 class RadioAudio:
     def __init__(self, config: AudioConfig) -> None:
         self.config = config
         self.media_library_dir = (Path(__file__).resolve().parent / config.media_library_dir).resolve()
         self.generated_audio_dir = (Path(__file__).resolve().parent / config.generated_audio_dir).resolve()
         self.generated_audio_dir.mkdir(parents=True, exist_ok=True)
+        self._process_lock = threading.Lock()
+        self._current_process: subprocess.Popen[str] | None = None
+        self._interrupted = threading.Event()
+
+    def clear_interrupt(self) -> None:
+        self._interrupted.clear()
+
+    def stop_current_playback(self) -> None:
+        self._interrupted.set()
+        with self._process_lock:
+            process = self._current_process
+        if process is None:
+            return
+        try:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+        except Exception:
+            # Best effort stop path; caller handles interruption state.
+            pass
 
     def play_music(self, query: str, preview_url: str | None = None) -> dict:
         local_match = self._find_local_track(query)
@@ -47,11 +75,13 @@ class RadioAudio:
             "track": None,
         }
 
-    def play_files(self, files: Iterable[Path]) -> dict:
+    def play_files(self, files: Iterable[Path], on_play_start: Callable[[int, Path], None] | None = None) -> dict:
         played: list[str] = []
         missing: list[str] = []
-        for path in files:
+        for index, path in enumerate(files):
             if path.exists():
+                if on_play_start is not None:
+                    on_play_start(index, path)
                 self._play_path(path)
                 played.append(str(path))
             else:
@@ -102,7 +132,18 @@ class RadioAudio:
             raise AudioPlaybackError(
                 "No supported local audio player found. Install mpg123, ffplay, cvlc, or aplay."
             )
-        subprocess.run(player, check=True)
+        process = subprocess.Popen(player)
+        with self._process_lock:
+            self._current_process = process
+        return_code = process.wait()
+        with self._process_lock:
+            if self._current_process is process:
+                self._current_process = None
+
+        if return_code != 0:
+            if self._interrupted.is_set():
+                raise PlaybackInterrupted("Playback interrupted")
+            raise AudioPlaybackError(f"Audio player exited with code {return_code}")
 
     def _player_command(self, path: Path) -> list[str] | None:
         if shutil.which("mpg123"):

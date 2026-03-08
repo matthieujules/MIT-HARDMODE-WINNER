@@ -14,6 +14,11 @@ hardware:
   speaker:
     enabled: true
     type: usb                # UPDATE — "usb" or "i2s"
+  dial:
+    driver: pca9685
+    pca9685_bus: 1
+    pca9685_address: 0x40
+    pca9685_channel: 0
 
   audio:
     output_device_hint: ""   # Optional ALSA/device hint
@@ -24,14 +29,23 @@ hardware:
   dial:
     enabled: true
     type: continuous_servo
+    driver: pca9685         # ServoKit/PCA9685 backend
     gpio_pin: 18
+    pca9685_bus: 1          # Use 3 for /dev/i2c-3 setups
+    pca9685_address: 0x40   # PCA9685 default I2C address
+    pca9685_channel: 0      # servo signal pin on PCA board: CH0-CH15
+    pca9685_frequency_hz: 50
+    min_pulse_us: 700
+    neutral_pulse_us: 1550
+    max_pulse_us: 2300
+    neutral_trim: -0.07        # small offset like -0.07 to stop drift
     min_pulse_width: 0.001
     max_pulse_width: 0.002
     stop_value: 0.0
-    clockwise_value: 0.8
-    counterclockwise_value: -0.8
-    turn_duration_seconds: 0.6
-    settle_seconds: 0.1
+    clockwise_value: 0.25
+    counterclockwise_value: -0.25
+    turn_duration_seconds: 0.2
+    settle_seconds: 0.15
 
   # No camera, no mic
 

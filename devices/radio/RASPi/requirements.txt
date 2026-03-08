@@ -5,4 +5,6 @@ openai>=1.65.0
 pydantic>=2.0
 PyYAML>=6.0.2
 python-dotenv>=1.0.1
-gpiozero>=2.0
+adafruit-blinka>=8.53.0
+adafruit-circuitpython-pca9685>=3.4.17
+adafruit-extended-bus>=1.0.2

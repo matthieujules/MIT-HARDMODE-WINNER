@@ -9,7 +9,16 @@ import yaml
 
 @dataclass
 class DialConfig:
+    driver: str = "pca9685"
     gpio_pin: int = 18
+    pca9685_bus: int = 1
+    pca9685_address: int = 0x40
+    pca9685_channel: int = 0
+    pca9685_frequency_hz: int = 50
+    min_pulse_us: int = 700
+    neutral_pulse_us: int = 1510
+    max_pulse_us: int = 2300
+    neutral_trim: float = +0.04
     min_pulse_width: float = 0.001
     max_pulse_width: float = 0.002
     stop_value: float = 0.0
@@ -46,7 +55,16 @@ def load_runtime_config(config_path: Path) -> RadioRuntimeConfig:
     return RadioRuntimeConfig(
         speaker_enabled=bool(speaker.get("enabled", True)),
         dial=DialConfig(
+            driver=str(dial_data.get("driver", "pca9685")).strip().lower() or "pca9685",
             gpio_pin=int(dial_data.get("gpio_pin", 18)),
+            pca9685_bus=int(dial_data.get("pca9685_bus", 1)),
+            pca9685_address=int(str(dial_data.get("pca9685_address", "0x40")), 0),
+            pca9685_channel=int(dial_data.get("pca9685_channel", 0)),
+            pca9685_frequency_hz=int(dial_data.get("pca9685_frequency_hz", 50)),
+            min_pulse_us=int(dial_data.get("min_pulse_us", 700)),
+            neutral_pulse_us=int(dial_data.get("neutral_pulse_us", 1500)),
+            max_pulse_us=int(dial_data.get("max_pulse_us", 2300)),
+            neutral_trim=float(dial_data.get("neutral_trim", 0.0)),
             min_pulse_width=float(dial_data.get("min_pulse_width", 0.001)),
             max_pulse_width=float(dial_data.get("max_pulse_width", 0.002)),
             stop_value=float(dial_data.get("stop_value", 0.0)),
