@@ -19,8 +19,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 
-from .master import apply_state_update, execute_master_turn, extract_device_instructions, extract_rover_targets
-from .spatial import merge_people_observations, resolve_target, update_device_activity
+from .master import apply_state_update, execute_master_turn, extract_device_instructions
+from .spatial import merge_people_observations
 from .router import (
     check_voice_lock,
     clear_voice_lock,
@@ -239,11 +239,16 @@ def _handle_action_result(event: DeviceEvent) -> dict:
     # Reset spatial status to idle
     state_manager.update_spatial_device(device_id, {"status": "idle"})
 
+    # Persist last action result so master can see device health
+    status = payload.get("status", "unknown")
+    detail = payload.get("detail", "")
+    state_manager.update_device_health(device_id, status, detail)
+
     logger.info(
         "Action result from %s: %s — %s",
         device_id,
-        payload.get("status"),
-        payload.get("detail", ""),
+        status,
+        detail,
     )
     return {"status": "ok", "detail": "action_result logged"}
 
@@ -451,16 +456,6 @@ async def _run_master_reasoning_inner(event: DeviceEvent) -> dict:
     # Step 5-7: Extract and dispatch device instructions
     instructions = extract_device_instructions(tool_calls)
 
-    # Extract rover targets and update spatial state
-    rover_targets = extract_rover_targets(tool_calls)
-    room_config = state_manager.read_room_config()
-    for target in rover_targets:
-        if room_config:
-            x, y = resolve_target(target, room_config)
-            state_manager.update_spatial_device("rover", {
-                "x_cm": x, "y_cm": y, "source": "master_reasoning",
-            })
-
     if not instructions:
         state_manager.append_master_log({
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -489,6 +484,13 @@ async def _run_master_reasoning_inner(event: DeviceEvent) -> dict:
             # Set voice lock for speaking devices
             if device_id in _SPEAKING_DEVICES:
                 set_voice_lock(device_id, state_manager)
+            # Update device health on dispatch failure (offline/error)
+            # Successful dispatches get health updated when action_result arrives
+            dispatch_status = result.get("status", "")
+            if dispatch_status in ("offline", "error"):
+                state_manager.update_device_health(
+                    device_id, dispatch_status, result.get("detail", "dispatch failed")
+                )
             dispatch_log.append({"device": device_id, "instruction": instruction, "result": result})
             results.append(result)
         return results

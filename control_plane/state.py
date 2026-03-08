@@ -111,6 +111,27 @@ class StateManager:
             self._state_path.write_text(json.dumps(state, default=str))
         logger.info("Spatial people updated: %d tracked", len(normalized))
 
+    # ── Device health (last action result per device, in state.json) ──
+
+    def update_device_health(self, device_id: str, status: str, detail: str) -> None:
+        """Record the last action result for a device in state.json."""
+        with self._lock:
+            state = json.loads(self._state_path.read_text())
+            health = state.get("device_health", {})
+            health[device_id] = {
+                "status": status,
+                "detail": detail[:120],
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            state["device_health"] = health
+            self._state_path.write_text(json.dumps(state, default=str))
+        logger.info("Device health updated: %s -> %s", device_id, status)
+
+    def read_device_health(self) -> dict:
+        """Return the device_health dict from state.json."""
+        state = json.loads(self._state_path.read_text())
+        return state.get("device_health", {})
+
     # ── Devices (devices.json) ─────────────────────────────────────
 
     def read_devices(self) -> list[DeviceInfo]:

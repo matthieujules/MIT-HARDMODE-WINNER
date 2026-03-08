@@ -61,77 +61,33 @@ MASTER_TOOLS = [
         },
     },
     {
-        "name": "send_to_lamp",
-        "description": "Send a natural language instruction to Lamp. Lamp is an expressive ambient actuator with RGB LED and servos. It communicates through color, brightness, and physical gestures. No speech.",
+        "name": "dispatch",
+        "description": "Send instructions to one or more devices. Include a shared context (mood, what happened) and per-device instructions. Only include devices that should act.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "instruction": {
+                "context": {
                     "type": "string",
-                    "description": "Natural language instruction describing what Lamp should do and why.",
+                    "description": "Shared context for all devices: what happened, mood, energy. Max 2 sentences. Written once, prepended to each device instruction.",
+                },
+                "lamp": {
+                    "type": "string",
+                    "description": "Lamp instruction: color, gesture, brightness. Lamp has poses, RGB LED, servos.",
+                },
+                "mirror": {
+                    "type": "string",
+                    "description": "Mirror instruction: what to display or edit. Has camera + screen behind two-way glass.",
+                },
+                "radio": {
+                    "type": "string",
+                    "description": "Radio instruction: what to play/express. Has 7 music tracks (A-G) and 19 soundbites.",
+                },
+                "rover": {
+                    "type": "string",
+                    "description": "Rover instruction: movement or emote. Has move, rotate, emote (excitement/sad/ponder/deliver).",
                 },
             },
-            "required": ["instruction"],
-        },
-    },
-    {
-        "name": "send_to_mirror",
-        "description": "Send a natural language instruction to Mirror. Mirror is a smart picture frame with a camera and display. It sees the room and can generate/display images. No speaker, no speech, no movement.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "instruction": {
-                    "type": "string",
-                    "description": "Natural language instruction describing what Mirror should do and why.",
-                },
-            },
-            "required": ["instruction"],
-        },
-    },
-    {
-        "name": "send_to_radio",
-        "description": "Send a natural language instruction to Radio. Radio is a stationary audio device with a speaker for music and speech.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "instruction": {
-                    "type": "string",
-                    "description": "Natural language instruction describing what Radio should do and why.",
-                },
-            },
-            "required": ["instruction"],
-        },
-    },
-    {
-        "name": "send_to_rover",
-        "description": "Send a natural language instruction to Rover. Rover is a small mobile coaster with motors that pulls a basket. The only mobile device. Optionally specify a target position on the room map.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "instruction": {
-                    "type": "string",
-                    "description": "Natural language instruction describing what Rover should do and why.",
-                },
-                "target": {
-                    "type": "object",
-                    "description": "Target position on the room map. Use a waypoint name OR explicit coordinates. Available waypoints: dock, center, desk, lamp_area, door.",
-                    "properties": {
-                        "waypoint": {
-                            "type": "string",
-                            "description": "Named waypoint: dock, center, desk, lamp_area, door",
-                        },
-                        "x_cm": {
-                            "type": "number",
-                            "description": "Explicit x coordinate in cm",
-                        },
-                        "y_cm": {
-                            "type": "number",
-                            "description": "Explicit y coordinate in cm",
-                        },
-                    },
-                },
-            },
-            "required": ["instruction"],
+            "required": ["context"],
         },
     },
     {
@@ -150,13 +106,8 @@ MASTER_TOOLS = [
     },
 ]
 
-# Tool name -> device_id mapping for send_to_* tools
-_SEND_TOOL_DEVICE_MAP = {
-    "send_to_lamp": "lamp",
-    "send_to_mirror": "mirror",
-    "send_to_radio": "radio",
-    "send_to_rover": "rover",
-}
+# Device keys recognized in the dispatch tool
+_DISPATCH_DEVICE_KEYS = {"lamp", "mirror", "radio", "rover"}
 
 # ── Tool format conversion ───────────────────────────────────────
 
@@ -179,12 +130,6 @@ def _tools_to_openai(tools: list[dict]) -> list[dict]:
 # ── Prompt assembly ───────────────────────────────────────────────
 
 _SOUL_DIR = Path(__file__).parent
-_DEVICE_SOUL_DIRS = [
-    Path("devices/lamp/SOUL.md"),
-    Path("devices/mirror/SOUL.md"),
-    Path("devices/radio/SOUL.md"),
-    Path("devices/rover/SOUL.md"),
-]
 
 # Truncation limits per spec §13
 _LIMITS = {
@@ -207,13 +152,7 @@ def assemble_prompt(state_manager: StateManager, triggering_event: DeviceEvent) 
     # 1. Master SOUL.md (goes into system prompt, handled separately)
     master_soul = state_manager.read_soul(str(_SOUL_DIR / "SOUL.md"))
 
-    # 2. All device SOUL.md files
-    for soul_path in _DEVICE_SOUL_DIRS:
-        soul_text = state_manager.read_soul(str(soul_path))
-        if soul_text:
-            sections.append(f"## Device Personality: {soul_path.parent.name}\n{soul_text}")
-
-    # 3. user.md
+    # 2. user.md
     user_md = state_manager.read_user_md()
     if user_md:
         sections.append(f"## User Profile\n{user_md[:_LIMITS['user_md']]}")
@@ -259,13 +198,32 @@ def assemble_prompt(state_manager: StateManager, triggering_event: DeviceEvent) 
             user = spatial.get("user", {})
             if user:
                 spatial_lines.append(f"User: ({user.get('x_cm')},{user.get('y_cm')}) {user.get('label','')}")
-        spatial_lines.append(
-            "Rover waypoints: " + ", ".join(
-                f"{wp['id']}({wp['x_cm']},{wp['y_cm']})"
-                for wp in room_config.get("waypoints", [])
-            )
-        )
         sections.append("## Spatial Map\n" + "\n".join(spatial_lines))
+
+    # 5c. Device health (last action result per device)
+    device_health = state_manager.read_device_health()
+    if device_health:
+        health_lines = []
+        now = time.time()
+        for dev_id, info in device_health.items():
+            status = info.get("status", "unknown")
+            detail = info.get("detail", "")
+            ts = info.get("ts", "")
+            # Calculate age if possible
+            age_str = ""
+            if ts:
+                try:
+                    from datetime import datetime, timezone
+                    dt = datetime.fromisoformat(ts)
+                    age_s = int(now - dt.timestamp())
+                    if age_s < 60:
+                        age_str = f" ({age_s}s ago)"
+                    elif age_s < 3600:
+                        age_str = f" ({age_s // 60}m ago)"
+                except Exception:
+                    pass
+            health_lines.append(f"  {dev_id}: {status} — \"{detail}\"{age_str}")
+        sections.append("## Device Health (last action result)\n" + "\n".join(health_lines))
 
     # 6. Recent events
     recent_events = state_manager.read_recent_events(max_chars=_LIMITS["events"])
@@ -304,7 +262,7 @@ def _call_anthropic(prompt: dict, tools: list[dict]) -> dict:
             betas = [_FAST_BETA, _BETA_HEADER]
             response = client.beta.messages.create(
                 model=_MODEL,
-                max_tokens=4096,
+                max_tokens=1500,
                 system=prompt["system"],
                 messages=prompt["messages"],
                 tools=tools,
@@ -319,7 +277,7 @@ def _call_anthropic(prompt: dict, tools: list[dict]) -> dict:
     if not used_fast:
         response = client.messages.create(
             model=_MODEL,
-            max_tokens=4096,
+            max_tokens=1500,
             system=prompt["system"],
             messages=prompt["messages"],
             tools=tools,
@@ -366,7 +324,7 @@ def _call_cerebras(prompt: dict, tools: list[dict]) -> dict:
 
     response = client.chat.completions.create(
         model=_MODEL,
-        max_tokens=4096,
+        max_tokens=1500,
         messages=messages,
         tools=openai_tools,
         tool_choice="required",
@@ -416,8 +374,7 @@ def call_master(prompt: dict, tools: list[dict] = MASTER_TOOLS) -> dict:
 
 # ── Response parsing ──────────────────────────────────────────────
 
-_KNOWN_TOOLS = {"update_user_state", "send_to_lamp", "send_to_mirror",
-                "send_to_radio", "send_to_rover", "no_op"}
+_KNOWN_TOOLS = {"update_user_state", "dispatch", "no_op"}
 
 
 def parse_tool_calls(response: dict) -> list[dict]:
@@ -433,9 +390,6 @@ def parse_tool_calls(response: dict) -> list[dict]:
         name = block["name"]
         if name not in _KNOWN_TOOLS:
             logger.warning("Unknown tool call rejected: %s", name)
-            continue
-        if name in _SEND_TOOL_DEVICE_MAP and "instruction" not in block["input"]:
-            logger.warning("Missing 'instruction' parameter for %s, rejected", name)
             continue
         calls.append({
             "tool": name,
@@ -467,26 +421,22 @@ def apply_state_update(state_manager: StateManager, tool_calls: list[dict]) -> N
 
 
 def extract_device_instructions(tool_calls: list[dict]) -> list[tuple[str, str]]:
-    """Return (device_id, instruction) pairs from send_to_* tool calls.
+    """Return (device_id, instruction) pairs from dispatch tool calls.
 
-    Preserves model order for sequential dispatch to the same device.
+    For each dispatch call, the shared ``context`` is prepended to each
+    per-device instruction with a newline separator so the device agent
+    receives full context.
     """
     instructions = []
     for tc in tool_calls:
-        if tc["tool"] in _SEND_TOOL_DEVICE_MAP:
-            device_id = _SEND_TOOL_DEVICE_MAP[tc["tool"]]
-            instruction = tc["input"]["instruction"]
-            instructions.append((device_id, instruction))
+        if tc["tool"] == "dispatch":
+            context = tc["input"].get("context", "")
+            for device_key in _DISPATCH_DEVICE_KEYS:
+                if device_key in tc["input"]:
+                    device_instruction = tc["input"][device_key]
+                    combined = f"{context}\n{device_instruction}" if context else device_instruction
+                    instructions.append((device_key, combined))
     return instructions
-
-
-def extract_rover_targets(tool_calls: list[dict]) -> list[dict]:
-    """Return target dicts from send_to_rover tool calls that include a target."""
-    targets = []
-    for tc in tool_calls:
-        if tc["tool"] == "send_to_rover" and "target" in tc["input"]:
-            targets.append(tc["input"]["target"])
-    return targets
 
 
 # ── Full master turn orchestration ────────────────────────────────
