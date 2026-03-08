@@ -4,6 +4,23 @@ import argparse
 import json
 import sys
 import threading
+from pathlib import Path
+
+# -- dotenv MUST load before importing agent (reads CEREBRAS_API_KEY at import time) --
+from dotenv import load_dotenv
+
+_here = Path(__file__).resolve().parent
+_radio_dir = _here.parent  # devices/radio/ (repo) or same dir (flat deploy)
+
+load_dotenv(_here / ".env")                # Pi flat deploy (files in ~/Radio/)
+load_dotenv(_radio_dir / ".env")           # Repo: devices/radio/.env
+load_dotenv(_here.parents[2] / ".env")     # Repo: project root .env
+
+# Ensure both directories are importable (repo: RASPi/ + radio/, flat: same dir)
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
+if str(_radio_dir) not in sys.path:
+    sys.path.insert(0, str(_radio_dir))
 
 from runtime import RadioRuntime
 
@@ -13,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("command", nargs="?", help="radio instruction from the control plane")
     parser.add_argument("--stdin", action="store_true", help="read the command from stdin")
     parser.add_argument("--loop", action="store_true", help="interactive CLI loop for local testing")
+    parser.add_argument("--connect", action="store_true", help="run the full WebSocket runtime (register + connect to control plane)")
     parser.add_argument("--dial-test", action="store_true", help="run a safe clockwise/counterclockwise dial test")
     parser.add_argument("--dial-seconds", type=float, default=0.2, help="seconds per dial movement in --dial-test")
     parser.add_argument("--dial-repeats", type=int, default=1, help="how many clockwise/counterclockwise test cycles")
@@ -26,7 +44,37 @@ def resolve_command(args: argparse.Namespace) -> str:
 
 
 def main() -> int:
+    import logging
+
     args = build_parser().parse_args()
+
+    # -- WebSocket runtime mode ------------------------------------------------
+    if args.connect:
+        import asyncio
+        from ws_client import load_config, run_ws_client
+
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        )
+
+        config_path = Path(__file__).resolve().with_name("config.yaml")
+        if not config_path.exists():
+            # Flat deploy: config.yaml alongside main.py
+            config_path = _here / "config.yaml"
+        if not config_path.exists():
+            # Repo: devices/radio/config.yaml
+            config_path = _radio_dir / "config.yaml"
+
+        config = load_config(config_path)
+        print(f"Radio runtime: connecting to control plane")
+        try:
+            asyncio.run(run_ws_client(config))
+        except KeyboardInterrupt:
+            print("\nRadio runtime stopped.")
+        return 0
+
+    # -- Original modes --------------------------------------------------------
     runtime = RadioRuntime.from_repo_defaults()
     try:
         if args.dial_test:
@@ -37,7 +85,7 @@ def main() -> int:
 
         command = resolve_command(args)
         if not command:
-            print("No command provided. Pass text directly, use --stdin, or use --loop.", file=sys.stderr)
+            print("No command provided. Pass text directly, use --stdin, --loop, or --connect.", file=sys.stderr)
             return 1
 
         result = runtime.handle_command(command)
