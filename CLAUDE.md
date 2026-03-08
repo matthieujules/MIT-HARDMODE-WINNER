@@ -134,7 +134,7 @@ MASTER_PROVIDER=auto             # auto-detects from model name. Options: anthro
 # Device agents (lamp, mirror)
 CEREBRAS_API_KEY=csk-...         # REQUIRED for lamp/mirror LLM agent loops
 LAMP_AGENT_MODEL=gpt-oss-120b   # Default. Cerebras model for lamp agent
-MIRROR_CEREBRAS_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
+MIRROR_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 ```
 
 ### Data Files (gitignored, in `data/`)

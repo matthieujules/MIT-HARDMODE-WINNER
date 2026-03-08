@@ -14,10 +14,16 @@ import time
 from pathlib import Path
 from typing import Any
 
-from camera import MirrorCamera
-from display import MirrorDisplay
-from image_generation import MirrorImageGenerator
-from planner import MirrorInstructionPlanner
+try:
+    from .camera import MirrorCamera
+    from .display import MirrorDisplay
+    from .image_generation import MirrorImageGenerator
+    from .planner import MirrorInstructionPlanner
+except ImportError:
+    from camera import MirrorCamera
+    from display import MirrorDisplay
+    from image_generation import MirrorImageGenerator
+    from planner import MirrorInstructionPlanner
 
 logger = logging.getLogger(__name__)
 
@@ -154,9 +160,9 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "summary": {"type": "string", "description": "Brief summary of what was displayed"},
+                    "detail": {"type": "string", "description": "Brief summary of what was displayed"},
                 },
-                "required": ["summary"],
+                "required": ["detail"],
             },
         },
     },
@@ -375,12 +381,12 @@ def _run_llm_loop(
 
             # If the model called done, we're finished
             if fn_name == "done":
-                summary = fn_args.get("summary", "completed")
-                logger.info("Agent loop completed: %s", summary)
+                detail = fn_args.get("detail", "completed")
+                logger.info("Agent loop completed: %s", detail)
                 elapsed = time.monotonic() - start_time
                 return {
                     "status": "ok",
-                    "detail": summary,
+                    "detail": detail,
                     "execution_log": execution_log,
                     "iterations": iteration + 1,
                     "elapsed_ms": round(elapsed * 1000),
@@ -404,7 +410,7 @@ def run_agent_loop(
     generator: MirrorImageGenerator,
     display: MirrorDisplay,
     max_iterations: int = 10,
-    time_budget_ms: int = 30000,
+    time_budget_ms: int = 60000,
     skip_camera: bool = False,
 ) -> dict[str, Any]:
     """Public entry point for the agent loop."""

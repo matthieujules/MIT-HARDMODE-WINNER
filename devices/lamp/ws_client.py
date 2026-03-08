@@ -289,7 +289,7 @@ async def _handle_message(
     elif msg_type == "spawn":
         instruction = msg_data.get("instruction", "")
         max_iterations = msg_data.get("max_iterations", 10)
-        time_budget_ms = msg_data.get("time_budget_ms", 30000)
+        time_budget_ms = msg_data.get("time_budget_ms", 45000)
         logger.info("Received spawn: %r request_id=%s", instruction[:80], request_id)
 
         # Run agent loop in a thread (it may do blocking LLM calls)
