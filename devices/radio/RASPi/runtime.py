@@ -16,7 +16,7 @@ RADIO_DIR = Path(__file__).resolve().parent.parent
 if str(RADIO_DIR) not in sys.path:
     sys.path.insert(0, str(RADIO_DIR))
 
-from brain import build_playback_for_code  # noqa: E402
+from brain import build_playback_for_code, build_playback_for_codes  # noqa: E402
 
 
 class RadioRuntime:
@@ -36,10 +36,14 @@ class RadioRuntime:
         return cls(config)
 
     def play_code(self, code: str) -> dict[str, Any]:
-        """Play a pre-selected clip code. Assembles glitch + clip, plays audio, spins dial."""
+        """Play a single pre-selected clip code. Kept for Layer 1 direct commands."""
+        return self.play_codes([code])
+
+    def play_codes(self, codes: list[str]) -> dict[str, Any]:
+        """Play one or more clip codes. Glitch interleaved before each clip."""
         self.audio.clear_interrupt()
         self.dial.attach()
-        result = build_playback_for_code(code)
+        result = build_playback_for_codes(codes)
         plan = result.get("plan", {})
         execution = result.get("execution", {})
         playback = execution.get("playback", {})

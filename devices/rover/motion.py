@@ -257,7 +257,7 @@ def rotate(degrees, speed=SPEED):
     Each wheel travels an arc of (degrees/360) * pi * wheelbase."""
     if degrees == 0:
         return
-    arc_cm = abs(degrees) / 1000.0 * math.pi * WHEELBASE_CM
+    arc_cm = abs(degrees) / 360.0 * math.pi * WHEELBASE_CM
     target = _cm_to_counts(arc_cm)
 
     if degrees > 0:

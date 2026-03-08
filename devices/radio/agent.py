@@ -105,20 +105,27 @@ def _build_tools() -> list[dict]:
             "function": {
                 "name": "play",
                 "description": (
-                    "Play a specific audio clip through the radio. "
-                    "A glitch effect and dial spin play automatically before the clip. "
+                    "Play one or more audio clips through the radio. "
+                    "A glitch effect and dial spin play automatically before each clip (not after the last). "
+                    "For communication, use 2 clips to piece together meaning (like Bumblebee). "
+                    "Max 4 clips per call. "
                     f"Available: {catalog_desc}"
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "selection": {
-                            "type": "string",
-                            "enum": codes,
-                            "description": "Code of the audio clip to play",
+                        "selections": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": codes,
+                            },
+                            "minItems": 1,
+                            "maxItems": 4,
+                            "description": "Codes of audio clips to play in sequence",
                         },
                     },
-                    "required": ["selection"],
+                    "required": ["selections"],
                 },
             },
         },
@@ -214,13 +221,21 @@ def _execute_tool_call(name: str, args: dict[str, Any], runtime: Any) -> str:
     """Execute a single tool call against the runtime. Returns a result string."""
     try:
         if name == "play":
-            code = str(args.get("selection", ""))
-            result = runtime.play_code(code)
+            selections = args.get("selections", [])
+            # Backward compat: accept old single "selection" param
+            if not selections and "selection" in args:
+                selections = [str(args["selection"])]
+            if not selections:
+                return "Play error: no selections provided"
+            result = runtime.play_codes(selections)
             if result.get("ok"):
                 catalog = _get_clip_catalog()
-                label = next((e["label"] for e in catalog if e["code"] == code), "unknown")
-                kind = next((e["kind"] for e in catalog if e["code"] == code), "unknown")
-                return f"Play ok: {code} — {label} ({kind})"
+                parts = []
+                for code in selections:
+                    label = next((e["label"] for e in catalog if e["code"] == code), "unknown")
+                    kind = next((e["kind"] for e in catalog if e["code"] == code), "unknown")
+                    parts.append(f"{code}={label} ({kind})")
+                return f"Play ok: {', '.join(parts)}"
             else:
                 return f"Play error: {result.get('error', 'unknown error')}"
 

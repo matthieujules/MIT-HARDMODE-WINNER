@@ -87,16 +87,27 @@ def get_clip_catalog() -> list[dict[str, str]]:
 
 
 def build_playback_for_code(code: str) -> dict[str, Any]:
-	"""Build a playback result dict for a pre-selected clip code.  No LLM call."""
+	"""Build a playback result dict for a single clip code. Delegates to multi-code version."""
+	return build_playback_for_codes([code])
+
+
+def build_playback_for_codes(codes: list[str]) -> dict[str, Any]:
+	"""Build a playback result dict for one or more clip codes.
+
+	Interleaves glitch between clips but not at the end:
+	  1 clip  → glitch, clip
+	  2 clips → glitch, clip1, glitch, clip2
+	  3 clips → glitch, clip1, glitch, clip2, glitch, clip3
+	"""
 	choices, glitch = _load_choices()
 
-	if code == "stop":
+	if not codes or codes == ["stop"]:
 		stop_clips: list[dict[str, Any]] = []
 		if glitch is not None:
 			stop_clips.append(_clip_entry(1, glitch))
 		return {
 			"ok": True,
-			"command": code,
+			"command": "stop",
 			"selection": "stop",
 			"plan": {"action": "stop_audio", "turn_radio": False, "selection": "stop"},
 			"execution": {
@@ -105,35 +116,42 @@ def build_playback_for_code(code: str) -> dict[str, Any]:
 			},
 		}
 
-	choice = choices.get(code)
-	if choice is None:
-		return {
-			"ok": False,
-			"error": f"No audio clip found for code '{code}'",
-			"command": code,
-			"selection": code,
-		}
+	# Validate all codes
+	resolved: list[AudioChoice] = []
+	for code in codes:
+		choice = choices.get(code)
+		if choice is None:
+			return {
+				"ok": False,
+				"error": f"No audio clip found for code '{code}'",
+				"command": ",".join(codes),
+				"selection": code,
+			}
+		resolved.append(choice)
 
+	# Build clip sequence: glitch before each clip, no glitch at the end
 	clips: list[dict[str, Any]] = []
 	next_index = 1
-	if glitch is not None:
-		clips.append(_clip_entry(next_index, glitch))
+	for i, choice in enumerate(resolved):
+		if glitch is not None:
+			clips.append(_clip_entry(next_index, glitch))
+			next_index += 1
+		clips.append(_clip_entry(next_index, choice))
 		next_index += 1
-	clips.append(_clip_entry(next_index, choice))
 
-	playback_type = "music" if choice.kind == "music" else "podcast"
+	playback_type = "music" if any(c.kind == "music" for c in resolved) else "podcast"
 	return {
 		"ok": True,
-		"command": code,
-		"selection": code,
+		"command": ",".join(codes),
+		"selection": codes,
 		"plan": {
 			"action": "output_podcast",
 			"turn_radio": True,
-			"selection": code,
-			"category": choice.kind,
+			"selection": codes,
+			"category": resolved[0].kind,
 		},
 		"execution": {
-			"final_selection": code,
+			"final_selection": codes,
 			"clips_generated": clips,
 			"playback": {
 				"type": playback_type,

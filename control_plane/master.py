@@ -262,7 +262,7 @@ def _call_anthropic(prompt: dict, tools: list[dict]) -> dict:
             betas = [_FAST_BETA, _BETA_HEADER]
             response = client.beta.messages.create(
                 model=_MODEL,
-                max_tokens=1500,
+                max_tokens=4096,
                 system=prompt["system"],
                 messages=prompt["messages"],
                 tools=tools,
@@ -277,7 +277,7 @@ def _call_anthropic(prompt: dict, tools: list[dict]) -> dict:
     if not used_fast:
         response = client.messages.create(
             model=_MODEL,
-            max_tokens=1500,
+            max_tokens=4096,
             system=prompt["system"],
             messages=prompt["messages"],
             tools=tools,
@@ -324,7 +324,7 @@ def _call_cerebras(prompt: dict, tools: list[dict]) -> dict:
 
     response = client.chat.completions.create(
         model=_MODEL,
-        max_tokens=1500,
+        max_tokens=4096,
         messages=messages,
         tools=openai_tools,
         tool_choice="required",

@@ -315,7 +315,7 @@ def _execute_tool_call(
             return "Display cleared to black."
 
         elif name == "done":
-            return f"DONE: {args.get('summary', 'completed')}"
+            return f"DONE: {args.get('detail', 'completed')}"
 
         else:
             return f"Unknown tool: {name}"
