@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from PIL import ImageOps
+
 try:
     from .camera import MirrorCamera
     from .display import MirrorDisplay
@@ -113,12 +115,11 @@ TOOLS = [
         "function": {
             "name": "edit_photo",
             "description": (
-                "Capture a camera frame of the user and EDIT it with a prompt. "
-                "Use this for requests involving the user's appearance: outfit changes, "
-                "style try-ons, artistic transformations of what the camera sees, "
-                "showing the user in a different setting, etc. "
-                "The camera frame is sent to an image editing model that modifies it "
-                "while preserving the user's identity and pose."
+                "Capture a camera frame of the user and apply a Snapchat-filter-style edit. "
+                "Use for anything involving the user's appearance: makeup, accessories, "
+                "costumes, hair, aging, style filters, face effects. "
+                "The edit MUST preserve the user's exact position, pose, and background — "
+                "think overlay effects on a mirror reflection, not a new photo."
             ),
             "parameters": {
                 "type": "object",
@@ -126,10 +127,11 @@ TOOLS = [
                     "prompt": {
                         "type": "string",
                         "description": (
-                            "Detailed editing instruction. Describe what to change about "
-                            "the camera image. E.g. 'Change the person's outfit to a "
-                            "vintage leather jacket and dark jeans' or 'Place the person "
-                            "in a tropical beach setting while keeping their appearance'."
+                            "Editing instruction. ALWAYS include: 'Keep the person's exact "
+                            "position, pose, and background unchanged.' Then describe what "
+                            "to add/modify ON the person. E.g. 'Add a golden crown and "
+                            "royal jewelry. Keep the person's exact position, pose, and "
+                            "background unchanged.'"
                         ),
                     },
                 },
@@ -145,6 +147,36 @@ TOOLS = [
                 "Capture a camera frame and return metadata (source, size). "
                 "Useful to check camera status before displaying. "
                 "Most of the time you do NOT need this — display() and edit_photo() capture automatically."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "show_original",
+            "description": (
+                "Show the original unedited photo on the display — the raw camera capture "
+                "from the most recent edit_photo call, before any AI transformation. "
+                "Use when the user wants to compare before/after or see what they actually "
+                "looked like. The original is mirrored (like a real mirror reflection)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "dismiss",
+            "description": (
+                "Clear the display back to black (invisible behind the mirror). "
+                "Use when explicitly asked to turn off the display or hide the image."
             ),
             "parameters": {
                 "type": "object",
@@ -222,7 +254,7 @@ def _execute_tool_call(
 
             plan = planner.plan(instruction)
             result = generator.generate(plan, frame)
-            screen_path = display.show_generated(result.image, ttl_s=20)
+            screen_path = display.show_generated(result.image, ttl_s=120)
 
             detail = (
                 f"Displayed '{plan.icon_name}' ({plan.display_mode}). "
@@ -246,7 +278,7 @@ def _execute_tool_call(
                 frame = camera.get_frame()
 
             result = generator.edit_frame(frame, prompt)
-            screen_path = display.show_generated(result.image, ttl_s=20)
+            screen_path = display.show_generated(result.image, ttl_s=120)
 
             detail = (
                 f"Edited camera frame with prompt. "
@@ -267,6 +299,20 @@ def _execute_tool_call(
                 f"Frame captured. Source: {frame.source}. "
                 f"Size: {frame.metadata.get('width', '?')}x{frame.metadata.get('height', '?')}"
             )
+
+        elif name == "show_original":
+            if generator.last_original_path is None or not generator.last_original_path.exists():
+                return "No original photo available — no edit has been done yet this session."
+            from PIL import Image
+            original = Image.open(generator.last_original_path).convert("RGB")
+            # Mirror it so it looks like a real reflection
+            mirrored = ImageOps.mirror(original)
+            display.show_generated(mirrored, ttl_s=120)
+            return f"Showing original (pre-edit) photo on display. Source: {generator.last_original_path}"
+
+        elif name == "dismiss":
+            display.show_mirror()
+            return "Display cleared to black."
 
         elif name == "done":
             return f"DONE: {args.get('summary', 'completed')}"

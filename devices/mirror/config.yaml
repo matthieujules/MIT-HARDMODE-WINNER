@@ -7,7 +7,7 @@ device_name: Mirror
 device_type: companion
 
 network:
-  ip: "mirror-pi"
+  ip: "mirrorhost"
   ssh_user: pi
   master_url: "http://claude-master:8000"
 
@@ -23,7 +23,7 @@ hardware:
   display:
     enabled: true
     type: lcd_hdmi           # UPDATE if using a different LCD connection
-    resolution: [1080, 1920]
+    resolution: [600, 1024]       # Portrait orientation (physically rotated screen)
 
   # No servo, no speaker, no mic
 

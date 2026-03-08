@@ -302,14 +302,10 @@ class MirrorDisplay:
             return self._camera_frame
 
     def _render_mirror_frame(self, frame: Image.Image) -> None:
+        # Behind a two-way mirror: don't show live camera feed (it would bleed through).
+        # Only generated images should be visible. Idle state = black.
         assert self._screen is not None
-        mirrored = ImageOps.mirror(frame.convert("RGB"))
-        fitted = ImageOps.fit(
-            mirrored,
-            self._window_size,
-            method=Image.Resampling.LANCZOS,
-        )
-        self._screen.blit(self._pil_to_surface(fitted), (0, 0))
+        self._screen.fill((0, 0, 0))
 
     def _render_placeholder(self) -> None:
         assert self._screen is not None
@@ -337,91 +333,8 @@ class MirrorDisplay:
         return self._build_placeholder_image(size, self._placeholder_status())
 
     def _build_placeholder_image(self, size: tuple[int, int], status: str) -> Image.Image:
-        width, height = size
-        image = Image.new("RGB", size, (6, 10, 18))
-        draw = ImageDraw.Draw(image)
-
-        for y in range(height):
-            ratio = y / max(1, height - 1)
-            color = (
-                int(8 + ratio * 14),
-                int(12 + ratio * 24),
-                int(20 + ratio * 52),
-            )
-            draw.line(((0, y), (width, y)), fill=color)
-
-        glow = Image.new("RGBA", size, (0, 0, 0, 0))
-        glow_draw = ImageDraw.Draw(glow)
-        glow_draw.ellipse(
-            (
-                int(width * 0.14),
-                int(height * 0.1),
-                int(width * 0.86),
-                int(height * 0.76),
-            ),
-            fill=(66, 150, 255, 50),
-        )
-        glow_draw.ellipse(
-            (
-                int(width * 0.24),
-                int(height * 0.18),
-                int(width * 0.76),
-                int(height * 0.66),
-            ),
-            fill=(25, 208, 184, 30),
-        )
-        glow = glow.filter(ImageFilter.GaussianBlur(radius=max(12, int(min(size) * 0.04))))
-        image = Image.alpha_composite(image.convert("RGBA"), glow)
-
-        draw = ImageDraw.Draw(image)
-        accent = (130, 226, 219)
-        outline_width = max(4, int(min(size) * 0.008))
-        draw.ellipse(
-            (
-                int(width * 0.22),
-                int(height * 0.14),
-                int(width * 0.78),
-                int(height * 0.7),
-            ),
-            outline=accent + (225,),
-            width=outline_width,
-        )
-
-        panel_top = int(height * 0.72)
-        draw.rounded_rectangle(
-            (
-                int(width * 0.08),
-                panel_top,
-                int(width * 0.92),
-                int(height * 0.9),
-            ),
-            radius=max(16, int(width * 0.03)),
-            fill=(7, 16, 28, 220),
-            outline=(72, 126, 176, 180),
-            width=max(2, int(width * 0.004)),
-        )
-
-        title_font = self._load_font(max(28, int(height * 0.055)), bold=True)
-        label_font = self._load_font(max(15, int(height * 0.02)), bold=True)
-        body_font = self._load_font(max(18, int(height * 0.024)))
-
-        title = "Mirror"
-        subtitle = "Live reflection standby"
-        title_x = int(width * 0.12)
-        title_y = int(height * 0.76)
-        draw.text((title_x, title_y), title, fill=(244, 249, 255), font=title_font)
-        subtitle_y = title_y + self._font_height(title_font) + max(8, int(height * 0.01))
-        draw.text((title_x, subtitle_y), subtitle, fill=(160, 184, 214), font=label_font)
-
-        status_label_y = subtitle_y + self._font_height(label_font) + max(18, int(height * 0.02))
-        draw.text((title_x, status_label_y), "CAMERA STATUS", fill=accent + (255,), font=label_font)
-
-        status_y = status_label_y + self._font_height(label_font) + max(8, int(height * 0.01))
-        for line in self._wrap_text(status.rstrip(".") + ".", body_font, int(width * 0.76)):
-            draw.text((title_x, status_y), line, fill=(218, 228, 242), font=body_font)
-            status_y += self._font_height(body_font) + max(4, int(height * 0.006))
-
-        return image.convert("RGB")
+        # Behind a two-way mirror: black = invisible. Any pixels lit up bleed through.
+        return Image.new("RGB", size, (0, 0, 0))
 
     def _load_font(self, size: int, bold: bool = False) -> ImageFont.ImageFont:
         candidates = [

@@ -32,6 +32,7 @@ class MirrorImageGenerator:
         self.client = self._build_image_client()
         self.image_model = os.getenv("MIRROR_IMAGE_MODEL", "gpt-image-1.5")
         self.image_quality = os.getenv("MIRROR_IMAGE_QUALITY", "medium")
+        self.last_original_path: Path | None = None
 
     def generate(self, plan: DisplayPlan, frame: CapturedFrame, allow_api: bool = True) -> GenerationResult:
         generated = None
@@ -65,6 +66,12 @@ class MirrorImageGenerator:
         Bypasses the planner — the prompt goes straight to the image edit API.
         Falls back to generate-from-prompt if edit fails, then to local fallback.
         """
+        # Save the original camera frame before any edits
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        original_path = self.output_dir / f"{timestamp}-original.png"
+        frame.image.convert("RGB").save(original_path)
+        self.last_original_path = original_path
+
         api_error = None
         generated = None
 

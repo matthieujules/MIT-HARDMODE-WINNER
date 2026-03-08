@@ -17,6 +17,11 @@ try:
 except ImportError:
     cv2 = None
 
+try:
+    from picamera2 import Picamera2
+except ImportError:
+    Picamera2 = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,10 +111,57 @@ class MirrorCamera:
         )
 
     def _capture_loop(self) -> None:
-        if cv2 is None:
-            self._publish_placeholder("opencv-python is not installed")
-            return
+        # Try picamera2 first (Pi 5 CSI cameras), then fall back to OpenCV.
+        if Picamera2 is not None:
+            try:
+                self._capture_loop_picamera2()
+                return
+            except Exception as exc:
+                logger.warning("picamera2 failed (%s), falling back to OpenCV", exc)
 
+        if cv2 is not None:
+            self._capture_loop_opencv()
+        else:
+            self._publish_placeholder("neither picamera2 nor opencv-python is installed")
+
+    def _capture_loop_picamera2(self) -> None:
+        requested_width, requested_height = self.capture_size
+        cam = Picamera2()
+        config = cam.create_video_configuration(
+            main={"size": (requested_width, requested_height), "format": "RGB888"},
+        )
+        cam.configure(config)
+        cam.start()
+
+        actual_width, actual_height = requested_width, requested_height
+        self._update_status(
+            available=True,
+            message=f"Camera picamera2 opened ({actual_width}x{actual_height})",
+        )
+        logger.info("picamera2 opened (%dx%d)", actual_width, actual_height)
+
+        try:
+            while not self._stop_event.is_set():
+                arr = cam.capture_array()
+                image = Image.fromarray(arr)
+                frame = CapturedFrame(
+                    image=image,
+                    source="camera",
+                    captured_at=time.time(),
+                    metadata={
+                        "device": "picamera2",
+                        "width": image.width,
+                        "height": image.height,
+                    },
+                )
+                self._publish_frame(frame)
+        finally:
+            cam.stop()
+            cam.close()
+            self._update_status(available=False, message="Camera stopped.")
+            logger.info("picamera2 closed")
+
+    def _capture_loop_opencv(self) -> None:
         capture_target = self._camera_target()
         camera = cv2.VideoCapture(capture_target)
         if not camera.isOpened():

@@ -10,7 +10,18 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env before importing modules that read env vars at import time.
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+# Local dir first (Pi deploy), then project root (dev).
+_here = Path(__file__).resolve().parent
+load_dotenv(_here / ".env")
+load_dotenv(_here.parents[1] / ".env")
+
+# On Pi (Wayland), SSH sessions don't inherit display env vars.
+# Set them so Pygame can render on the physical screen.
+if not os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("DISPLAY"):
+    _wayland_sock = Path(f"/run/user/{os.getuid()}/wayland-0")
+    if _wayland_sock.exists():
+        os.environ["WAYLAND_DISPLAY"] = "wayland-0"
+        os.environ.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
 
 import yaml
 
