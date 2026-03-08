@@ -96,10 +96,12 @@ def set_voice_lock(device_id: str, state_manager) -> None:
 
 
 def clear_voice_lock(device_id: str, state_manager) -> None:
-    """Clear the speaking flag for a device."""
-    state = state_manager.read_state()
-    voice_lock = state.get("voice_lock", {})
-    if device_id in voice_lock:
-        del voice_lock[device_id]
-        state_manager.write_state({"voice_lock": voice_lock})
-        logger.info("Voice lock cleared for %s", device_id)
+    """Clear the speaking flag for a device.
+
+    Note: we set is_speaking=False rather than deleting the key, because
+    write_state uses deep_merge which cannot remove keys from nested dicts.
+    """
+    state_manager.write_state({
+        "voice_lock": {device_id: {"is_speaking": False}}
+    })
+    logger.info("Voice lock cleared for %s", device_id)

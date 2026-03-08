@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -10,6 +12,8 @@ from typing import Callable, Iterable
 import httpx
 
 from config import AudioConfig
+
+logger = logging.getLogger(__name__)
 
 
 class AudioPlaybackError(RuntimeError):
@@ -127,6 +131,11 @@ class RadioAudio:
         return out_path
 
     def _play_path(self, path: Path) -> None:
+        # Sim mode: log the clip instead of playing audio
+        if os.environ.get("RADIO_SIM", "").strip().lower() in {"1", "true", "yes"}:
+            logger.info("[SIM] Would play: %s", path.name)
+            return
+
         player = self._player_command(path)
         if player is None:
             raise AudioPlaybackError(

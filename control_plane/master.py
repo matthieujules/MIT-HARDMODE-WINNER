@@ -157,11 +157,16 @@ def assemble_prompt(state_manager: StateManager, triggering_event: DeviceEvent) 
     if user_md:
         sections.append(f"## User Profile\n{user_md[:_LIMITS['user_md']]}")
 
-    # 4. devices.json
+    # 4. devices.json (strip status/last_seen/is_virtual — master doesn't need connection state)
     devices = state_manager.read_devices()
-    devices_text = json.dumps(
-        [d.model_dump(mode="json") for d in devices], default=str, indent=2
-    )
+    devices_clean = []
+    for d in devices:
+        dd = d.model_dump(mode="json")
+        dd.pop("status", None)
+        dd.pop("last_seen", None)
+        dd.pop("is_virtual", None)
+        devices_clean.append(dd)
+    devices_text = json.dumps(devices_clean, default=str, indent=2)
     sections.append(f"## Device Registry\n```json\n{devices_text[:_LIMITS['devices_json']]}\n```")
 
     # 5. state.json
@@ -184,7 +189,7 @@ def assemble_prompt(state_manager: StateManager, triggering_event: DeviceEvent) 
         for dev_id, dev in spatial.get("devices", {}).items():
             spatial_lines.append(
                 f"  {dev_id}: ({dev.get('x_cm')},{dev.get('y_cm')}) "
-                f"{'fixed' if dev.get('fixed') else 'mobile'} status={dev.get('status','idle')}"
+                f"{'fixed' if dev.get('fixed') else 'mobile'}"
             )
         people = spatial.get("people", [])
         if people:
@@ -200,30 +205,7 @@ def assemble_prompt(state_manager: StateManager, triggering_event: DeviceEvent) 
                 spatial_lines.append(f"User: ({user.get('x_cm')},{user.get('y_cm')}) {user.get('label','')}")
         sections.append("## Spatial Map\n" + "\n".join(spatial_lines))
 
-    # 5c. Device health (last action result per device)
-    device_health = state_manager.read_device_health()
-    if device_health:
-        health_lines = []
-        now = time.time()
-        for dev_id, info in device_health.items():
-            status = info.get("status", "unknown")
-            detail = info.get("detail", "")
-            ts = info.get("ts", "")
-            # Calculate age if possible
-            age_str = ""
-            if ts:
-                try:
-                    from datetime import datetime, timezone
-                    dt = datetime.fromisoformat(ts)
-                    age_s = int(now - dt.timestamp())
-                    if age_s < 60:
-                        age_str = f" ({age_s}s ago)"
-                    elif age_s < 3600:
-                        age_str = f" ({age_s // 60}m ago)"
-                except Exception:
-                    pass
-            health_lines.append(f"  {dev_id}: {status} — \"{detail}\"{age_str}")
-        sections.append("## Device Health (last action result)\n" + "\n".join(health_lines))
+    # 5c. Device health — omitted from prompt to avoid master fixating on offline devices
 
     # 6. Recent events
     recent_events = state_manager.read_recent_events(max_chars=_LIMITS["events"])
