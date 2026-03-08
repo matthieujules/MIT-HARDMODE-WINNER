@@ -84,11 +84,57 @@ Run: `python3 -m vision.vision_service` (or `--test`, `--calibrate`)
 | `control_plane/spatial.py` | Spatial state management, deep_merge, waypoint resolution |
 | `data/room.json` | Static room config (500×400cm, furniture, anchors, waypoints) |
 
+### Mirror Device Runtime (deployed on Pi, tested end-to-end)
+
+| File | Purpose |
+|------|---------|
+| `devices/mirror/main.py` | Entry point: `--connect` for WS runtime, auto-detects Wayland display env |
+| `devices/mirror/ws_client.py` | WebSocket client: register, connect, heartbeat, auto-reconnect |
+| `devices/mirror/agent.py` | LLM agent loop (Cerebras gpt-oss-120b), tools: `display`, `edit_photo`, `show_original`, `capture_frame`, `dismiss`, `done` |
+| `devices/mirror/display.py` | Pygame fullscreen display: idle=black (behind two-way mirror), GENERATED state with 120s TTL |
+| `devices/mirror/camera.py` | picamera2 (Pi 5 CSI) with OpenCV fallback, persistent capture thread |
+| `devices/mirror/image_generation.py` | OpenAI gpt-image-1.5 for generation + editing, saves original before edits |
+| `devices/mirror/planner.py` | Regex planner for Layer 1 commands |
+| `devices/mirror/SOUL.md` | Mirror personality: Snapchat-filter style edits, emotional drawings, before/after |
+
+Pi: `mirrorhost` / `100.89.245.128`, SSH: `mirror@mirrorhost` (password: mirror, key installed)
+Boot: `ssh mirror@mirrorhost 'cd ~/Mirror && MASTER_URL="http://claude-master:8000" ~/mirror-venv/bin/python3 main.py --connect'`
+Deploy: `scp devices/mirror/{main.py,ws_client.py,agent.py,display.py,camera.py,image_generation.py,planner.py,models.py,SOUL.md,config.yaml} mirror@mirrorhost:~/Mirror/`
+
+### Rover Device Runtime (deployed on Pi, tested end-to-end)
+
+| File | Purpose |
+|------|---------|
+| `devices/rover/main.py` | Entry point: lazy motion import (encoder threads burn CPU if imported early) |
+| `devices/rover/ws_client.py` | WebSocket client to control plane |
+| `devices/rover/agent.py` | LLM agent loop (Cerebras gpt-oss-120b), tools: `move`, `rotate`, `stop`, `emote`, `done` |
+| `devices/rover/planner.py` | Regex planner for Layer 1 direct commands |
+| `devices/rover/motion.py` | PID-controlled differential drive, encoder polling with 100μs sleep |
+
+Pi: `roverhost` / `100.97.253.17`, SSH: `rover@roverhost` (password: rover, key installed)
+Boot: `ssh rover@roverhost 'cd ~/Rover && MASTER_URL="http://claude-master:8000" ~/rover-venv/bin/python3 main.py --connect'`
+
+### Radio Device Runtime (audio + dial hardware working, no WS client yet)
+
+| File | Purpose |
+|------|---------|
+| `devices/radio/brain.py` | Audio decision engine: routes requests to pre-recorded clips via OpenAI |
+| `devices/radio/config.yaml` | Hardware config (USB speaker, PCA9685 servo dial) |
+| `devices/radio/SOUL.md` | Radio personality |
+| `devices/radio/RASPi/main.py` | Pi entry point: `--loop` for interactive, CLI for single commands |
+| `devices/radio/RASPi/runtime.py` | Hardware executor: plays audio, triggers dial spins |
+| `devices/radio/RASPi/audio.py` | Local audio playback (mpg123/ffplay/cvlc) |
+| `devices/radio/RASPi/dial.py` | PCA9685 servo control for physical dial |
+| `devices/radio/Sounds/` | Audio asset library (29 pre-recorded clips) |
+
+Pi: `radiohost` / `100.119.150.35`
+Test: `python3 devices/radio/RASPi/main.py "play calm morning music"`
+
 ### Networking
 
 All device configs (`devices/*/config.yaml`) use Tailscale hostnames:
 - Laptop: `claude-master`
-- Pis: `lamp-pi`, `mirror-pi`, `radio-pi`, `rover-pi`
+- Pis: `lamphost`, `mirrorhost`, `radiohost`, `roverhost`
 - Setup script: `scripts/setup-pi-tailscale.sh`
 
 ## How to Test
@@ -106,9 +152,11 @@ python3 -m uvicorn control_plane.app:app --host 0.0.0.0 --port 8000
 cd devices/lamp && MASTER_URL="http://localhost:8000" python3 main.py --connect
 # Lamp auto-registers, connects via WebSocket, warms up LLM on boot
 
-# 5. Register other devices (no runtime yet, but master can reason about them)
-curl -X POST localhost:8000/register -H 'Content-Type: application/json' \
-  -d '{"device_id":"mirror","device_name":"Mirror","device_type":"picture_frame","capabilities":["see","display_image"],"actions":["display_image"],"ip":"mirror-pi"}'
+# 5. Start other devices (each auto-registers on connect)
+# Mirror:
+ssh mirror@mirrorhost 'cd ~/Mirror && MASTER_URL="http://claude-master:8000" ~/mirror-venv/bin/python3 main.py --connect'
+# Rover:
+ssh rover@roverhost 'cd ~/Rover && MASTER_URL="http://claude-master:8000" ~/rover-venv/bin/python3 main.py --connect'
 
 # 6. Test master reasoning (all transcripts go to master, no deterministic routing)
 curl -X POST localhost:8000/events -H 'Content-Type: application/json' \
@@ -147,22 +195,23 @@ MIRROR_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 
 ## What's Not Built Yet
 
-- **Mirror/Radio/Rover runtimes** — Lamp runtime is the template; other devices need their own
-- **TTS** — ElevenLabs/Piper integration for Radio (mirror has no speaker)
+- **Radio WebSocket client** — Radio has audio + dial hardware working but no control plane integration (no ws_client.py)
+- **TTS** — ElevenLabs/Piper integration for Radio
 - **Tick scheduler** — periodic tick event generator (currently manual via curl)
 
 ## V1 Stack
 
 - Python 3.11+
 - FastAPI control plane on the laptop
-- Claude Sonnet 4.6 as default master model (configurable, supports Cerebras)
+- Claude Opus 4.6 as master model (configurable via MASTER_MODEL env var)
 - 1M context beta header `context-1m-2025-08-07`
 - Claude Vision called centrally from the laptop (wired, triggers on people_count change only)
 - Silero VAD + Groq Whisper sidecar for voice capture
 - Voice events preempt vision-triggered master turns (cancellation + lock release)
-- Lamp runtime on laptop (Cerebras gpt-oss-120b agent loop, tested end-to-end)
-- Mirror is a picture frame (camera + display, no speaker, no tilt servo)
-- Other device runtimes not yet built
+- Lamp runtime on Pi (Cerebras gpt-oss-120b agent loop, arm + LED)
+- Mirror runtime on Pi (Cerebras agent + OpenAI gpt-image-1.5 for image gen/edit, picamera2, Pygame fullscreen)
+- Rover runtime on Pi (Cerebras agent, PID differential drive, encoder feedback)
+- Radio runtime on Pi (audio playback + servo dial, no WS client yet)
 
 ## Design Principles
 
@@ -191,6 +240,14 @@ MIRROR_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 - **`gripper.pos` must be stripped from poses** — SO100FollowerConfig has 5 motors, no gripper. Passing `gripper.pos` causes `StopIteration` crash. `hardware.py` handles this automatically.
 - **Lamp hardware.py uses Robot API, NOT raw servo bus** — `compat.py` was deleted. The working path is `SO100FollowerConfig` + `make_robot_from_config()` + `robot.send_action()` with `.pos` suffix keys.
 - **Lamp poses are dynamic** — agent tools are built from `poses.json` at boot. To add a pose: `record.py save <name>` on Pi → restart lamp process. No code changes or redeployment needed.
+- **Mirror Pi uses picamera2, NOT OpenCV** — Pi 5 CSI cameras (OV5647) don't work with `cv2.VideoCapture`. camera.py tries picamera2 first, falls back to OpenCV.
+- **Mirror display is portrait (rotated 90°)** — `wlr-randr --output HDMI-A-2 --transform 90` in `~/.config/labwc/autostart`. Pygame sees 600x1024, API generates 1024x1536 portrait images.
+- **Mirror idle = pure black** — display.py renders black when no generated image is showing. Behind a two-way mirror, any pixels bleed through.
+- **Mirror Pi desktop must be killed** — `~/.config/labwc/autostart` overrides system autostart: runs `swaybg -c "#000000"`, does NOT start pcmanfm or wf-panel-pi.
+- **Mirror SSH: `mirror@mirrorhost`** — password `mirror`, key installed. Was rate-limited by fail2ban after rapid SSH attempts; power cycle clears it.
+- **Mirror dotenv path** — main.py loads from local dir first (`_here / ".env"`), then project root. Same fix as rover.
+- **Rover SSH: `rover@roverhost`** — password `rover`, key installed.
+- **Rover motion.py encoder threads** — busy-loops with `time.sleep(0.0001)`. Don't import at startup; lazy-load when needed.
 
 **Orchestrate, don't implement.** Delegate multi-file work to subagents (Task tool). Your context is for orchestration.
 
