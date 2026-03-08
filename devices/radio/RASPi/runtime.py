@@ -123,9 +123,9 @@ class RadioRuntime:
         def _run_spin() -> None:
             with self._dial_spin_lock:
                 if clockwise:
-                    self.dial.nudge_clockwise(duration_seconds=1.0)
+                    self.dial.nudge_clockwise(duration_seconds=1.2)
                 else:
-                    self.dial.nudge_counterclockwise(duration_seconds=1.0)
+                    self.dial.nudge_counterclockwise(duration_seconds=1.2)
 
         thread = threading.Thread(target=_run_spin, daemon=True)
         self._dial_threads.append(thread)
