@@ -6,13 +6,14 @@ Each tuple sets the LED to that color for the given duration.
 After the last tuple, the LED turns off.
 
 Pin config loaded from config.yaml in this directory.
+Uses lgpio directly — no sudo required on bookworm.
 PWM duty cycle = value / 255 * 100
 """
 
 import os
 import time
 
-import RPi.GPIO as GPIO
+import lgpio
 import yaml
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
@@ -31,27 +32,18 @@ class LEDController:
         self.red_pin = led_cfg["pins"]["red"]
         self.green_pin = led_cfg["pins"]["green"]
         self.blue_pin = led_cfg["pins"]["blue"]
-        freq = led_cfg.get("pwm_frequency", 1000)
+        self.freq = led_cfg.get("pwm_frequency", 1000)
 
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
+        self._chip = lgpio.gpiochip_open(0)
 
         for pin in (self.red_pin, self.green_pin, self.blue_pin):
-            GPIO.setup(pin, GPIO.OUT)
-
-        self.pwm_r = GPIO.PWM(self.red_pin, freq)
-        self.pwm_g = GPIO.PWM(self.green_pin, freq)
-        self.pwm_b = GPIO.PWM(self.blue_pin, freq)
-
-        self.pwm_r.start(0)
-        self.pwm_g.start(0)
-        self.pwm_b.start(0)
+            lgpio.gpio_claim_output(self._chip, pin)
 
     def set_color(self, r, g, b):
         """Set RGB values (0-255)."""
-        self.pwm_r.ChangeDutyCycle(r / 255.0 * 100)
-        self.pwm_g.ChangeDutyCycle(g / 255.0 * 100)
-        self.pwm_b.ChangeDutyCycle(b / 255.0 * 100)
+        lgpio.tx_pwm(self._chip, self.red_pin, self.freq, r / 255.0 * 100)
+        lgpio.tx_pwm(self._chip, self.green_pin, self.freq, g / 255.0 * 100)
+        lgpio.tx_pwm(self._chip, self.blue_pin, self.freq, b / 255.0 * 100)
 
     def off(self):
         self.set_color(0, 0, 0)
@@ -69,8 +61,7 @@ class LEDController:
             self.off()
 
     def cleanup(self):
-        self.off()
-        self.pwm_r.stop()
-        self.pwm_g.stop()
-        self.pwm_b.stop()
-        GPIO.cleanup()
+        for pin in (self.red_pin, self.green_pin, self.blue_pin):
+            lgpio.tx_pwm(self._chip, pin, 0, 0)
+            lgpio.gpio_write(self._chip, pin, 0)
+        lgpio.gpiochip_close(self._chip)

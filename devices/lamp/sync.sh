@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync LAMP_TASC folder to the Lamp Pi.
+# Sync lamp folder to the Lamp Pi.
 #
 # Usage:
 #   ./sync.sh                     # sync to lamphost
@@ -10,7 +10,7 @@ set -euo pipefail
 
 HOST="${1:-lamphost}"
 REMOTE_USER="lamp"
-REMOTE_DIR="/home/${REMOTE_USER}/Desktop/LAMP_TASC"
+REMOTE_DIR="/home/${REMOTE_USER}/Desktop/lamp"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)/"
 
 EXTRA_FLAGS=""
