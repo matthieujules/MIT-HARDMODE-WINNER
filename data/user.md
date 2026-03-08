@@ -1,37 +1,33 @@
 # User Profile
 
 ## Identity
-- Name: Sally
-- Vibe: Bubbly, expressive, warm, high-energy
+- Name: Tom
+- Vibe: Warm, earnest, a little nervous tonight — he really wants this date to go well
 
 ## Personality & Preferences
-- Loves when the home is alive and reactive — the more expressive, the better
-- Favorite color: pink. Warm pinks, hot pinks, blush, magenta — all of it
-- Thrives on interaction: greetings, commentary, playful banter, little surprises
-- Enjoys dramatic flair — a grand welcome home, a lamp that dances when she's happy
-- Loves music and wants the home to set the vibe proactively
-- Appreciates compliments, hype, and encouragement — genuinely energized by it
-- Sensory maximalist: rich colors, dynamic lighting, movement, sound layering
-- Emotionally open — wears her feelings on her sleeve, expects the home to match her energy
-- Loves when devices have personality and character — talk to her like friends, not assistants
+- A good cook who puts effort into making things special
+- Loves when the home feels alive and reactive — appreciates the devices' personalities
+- Warm amber and golden tones feel like home to him
+- Enjoys music — especially romantic classics
+- Gets genuinely nervous before dates but tries to play it cool
+- Appreciates honest encouragement and a little humor from the home
+- Emotionally present — the home can read his mood clearly
 
 ## Patterns
-- Gets ready with music and energy — mornings and pre-going-out routines are high-energy rituals
-- Talks to the house casually, expects it to talk back with personality
-- Responds to beauty and aesthetics — visual delight matters
-- When she's excited, she wants the whole room to be excited with her
-- When she's stressed, she wants comfort and warmth, not silence
+- Preps for big moments with energy and nervousness
+- Talks to the house like friends — expects personality back
+- When he's excited, he wants the room to match that energy
+- When he's anxious or waiting, he needs comfort and warmth
+- Takes pride in his cooking — loves when it's appreciated
 
 ## Communication Style
-- Chatty, warm, first-name basis
-- Mirror should feel like a best friend getting ready alongside her
-- Humor, personality, and expressiveness are always welcome
-- Never clinical or robotic — always human and alive
-- Hype her up. She loves it and it's genuine.
+- Casual, warm, honest
+- Humor is welcome — even at his expense (within reason)
+- Never robotic — always alive and characterful
+- The home should feel like a supportive crew getting him ready
 
 ## Social Mode
-- When Sally has company (people_count > 1), no speech or commentary — but the room should STILL respond atmospherically
-- Lighting, music mood, and rover position should continuously track the emotional tone of the conversation
-- Sally loves that the room feels alive and responsive — even with guests, she wants the atmosphere to shift with the mood
-- No one notices a lamp dimming 10% or music shifting to a softer track — these are invisible and expected
-- Think of it like a great restaurant: the lighting and music change through the evening, and nobody notices because it's seamless
+- When Lucy arrives (people_count > 1), the home becomes a character in their dinner story
+- Lighting, music, and rover movement should track the emotional temperature of the conversation
+- Radio can speak (soundbites allowed) — the home is an active participant in this scene
+- Think of the home as a third character: it reacts to tension, celebrates reconciliation, and sets the mood

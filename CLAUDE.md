@@ -126,7 +126,7 @@ Boot: `ssh rover@roverhost 'cd ~/Rover && MASTER_URL="http://claude-master:8000"
 | `devices/radio/SOUL.md` | Radio personality: Bumblebee — communicates through found audio clips |
 | `devices/radio/RASPi/main.py` | Pi entry point: `--connect` for WS runtime, `--loop` for clip codes, CLI for single commands |
 | `devices/radio/RASPi/runtime.py` | Hardware executor: `play_code(code)` plays audio + triggers dial spins on glitch clips |
-| `devices/radio/RASPi/audio.py` | Local audio playback (mpg123/ffplay/cvlc) |
+| `devices/radio/RASPi/audio.py` | Local audio playback (mpg123/ffplay/cvlc), RADIO_SIM=1 skips playback |
 | `devices/radio/RASPi/dial.py` | PCA9685 servo control for physical dial (requires adafruit-circuitpython-pca9685) |
 | `devices/radio/Sounds/` | Audio asset library (29 pre-recorded clips: 7 music A-G, 19 soundbites, 1 glitch) |
 
@@ -143,6 +143,28 @@ All device configs (`devices/*/config.yaml`) use Tailscale hostnames:
 - Setup script: `scripts/setup-pi-tailscale.sh`
 
 ## How to Test
+
+### Full Local Test (sim mode, no hardware needed)
+
+```bash
+# Start control plane + all 4 device agents locally in sim mode
+bash tests/start_full_local.sh
+
+# Run the dinner scenario (10 transcript events testing multi-device coordination)
+bash tests/run_dinner_live.sh
+
+# Kill everything
+bash tests/start_full_local.sh --kill
+```
+
+All devices run real Cerebras LLM agent loops but skip hardware (lamp logs LED/arm, mirror runs headless, rover logs movements, radio logs clip playback via `RADIO_SIM=1`). Logs at `/tmp/claudehome_*.log`.
+
+| File | Purpose |
+|------|---------|
+| `tests/start_full_local.sh` | Launch control plane + all 4 devices in sim mode, wipes state/logs |
+| `tests/run_dinner_live.sh` | 10-event dinner scenario, shows master reasoning + device agent responses |
+
+### Manual Testing
 
 ```bash
 # 1. Install deps
@@ -264,6 +286,10 @@ RADIO_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for radio
 - **Stale processes lock lamp serial bus** — old `move.py` or crashed lamp processes hold `/dev/ttyACM*` open. New lamp process falls back to sim mode ("falling back to sim for arm"). Fix: `pkill -u lamp python3`, wait, restart.
 - **Device processes die silently on Pi** — no supervisor/systemd service. If a device process crashes (OOM, unhandled exception), it stays dead. Check with `pgrep -u <user> python3`. Logs at `/tmp/<device>.log` are overwritten on restart, so crash output is lost.
 - **Mirror process fragile** — mirror can crash from image generation timeouts, pygame display issues, or camera errors. Always check `/tmp/mirror.log` immediately after a crash before restarting (restart overwrites the log).
+- **Voice lock deep_merge bug** — `clear_voice_lock` must set `is_speaking: False`, NOT delete the key. `write_state` uses `deep_merge` which cannot remove keys from nested dicts. Writing `{"voice_lock": {}}` leaves old `is_speaking: true` intact.
+- **Radio agent zombie threads on spawn preemption** — `asyncio.to_thread` threads survive task cancellation. The agent loop MUST accept a `threading.Event` cancel_event and check it each iteration. Without this, two concurrent agent loops interfere with each other.
+- **RADIO_SIM=1 for local testing** — without it, ffplay/mpg123 on macOS plays actual MP3 files for 2-3 minutes, blocking the agent thread. Set in `tests/start_full_local.sh`.
+- **Radio agent play result must hint "Call done()"** — in sim mode, play returns instantly (no audio blocking), so the model loops `play` 10 times hitting max iterations. The tool result message `"Call done() to finish."` guides the model to terminate.
 
 **Orchestrate, don't implement.** Delegate multi-file work to subagents (Task tool). Your context is for orchestration.
 
