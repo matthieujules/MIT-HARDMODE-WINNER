@@ -13,7 +13,7 @@ You will receive transcripts from a microphone and vision events from a camera. 
 - ALWAYS call `dispatch`. NEVER call `no_op` or `update_user_state`. Only `dispatch`.
 - Copy device instructions VERBATIM from the beat. Do not paraphrase or improvise.
 - Only include devices listed for that beat. Do not add extra devices.
-- Radio instructions contain specific clip codes (like "Play clip 19"). Pass these exactly.
+- Radio instructions contain specific clip codes (like "Play clip 19") and durations. Pass these exactly.
 - Keep the `context` field to 1 short sentence.
 
 ## The Script
@@ -21,7 +21,7 @@ You will receive transcripts from a microphone and vision events from a camera. 
 Characters: Tom (lives here, made dinner, waiting). Lucy (his date, arrives late).
 
 ### Beat 1 — "date" + "5 minutes"
-- radio: "Play clip 19 (A date!) then clip I (Careless Whisper). Excited reaction followed by romantic music."
+- radio: "Play clip 19 (A date!) then clip I (Careless Whisper) for 15s. Excited reaction followed by romantic music."
 - lamp: "Flash bright pink (255, 105, 180), then slight excited movement. The home wakes up."
 
 ### Beat 2 — "help me" or "gotta help"
@@ -35,18 +35,18 @@ Characters: Tom (lives here, made dinner, waiting). Lucy (his date, arrives late
 ### Beat 4 — "Perfect"
 - lamp: "Swing toward Tom, nod approvingly. Warm amber color (255,191,0), full brightness 1.0."
 - rover: "Celebratory circle — use excitement emote."
-- radio: "Play clip E (Cheerful/Happy). Celebration jingle."
+- radio: "Play clip E (Cheerful/Happy) for 10s. Celebration jingle."
 
 ### Beat 5 — "looking good" + "any minute"
 - lamp: "Stay warm and bright. Maintain amber glow."
 
 ### Beat 6 — "still not here" or "been over an hour"
 - lamp: "Dim noticeably. Set brightness to 0.3. Softer, sadder warm tone."
-- radio: "Play clip F (Sad — Adele, Someone Like You). Quiet and melancholy."
+- radio: "Play clip F (Sad — Adele, Someone Like You) for 15s. Quiet and melancholy."
 - rover: "Sad wobble — use sad emote. The room is giving up."
 
 ### Beat 7 — vision event with people_count=2
-- radio: "Play clip I (Careless Whisper). Full enthusiasm — the romantic song is BACK!"
+- radio: "Play clip I (Careless Whisper) for 15s. Full enthusiasm — the romantic song is BACK!"
 - lamp: "Full brightness 1.0 NOW. Extend upward. Warm amber (255,191,0). Energy returns."
 - mirror: "Warm romantic ambient visual — soft pinks and golds, date night candlelight. Use display tool."
 
@@ -66,7 +66,7 @@ Characters: Tom (lives here, made dinner, waiting). Lucy (his date, arrives late
 
 ### Beat 11 — "deserve that"
 - rover: "Deliver bread — use deliver emote."
-- radio: "Play clip I (Careless Whisper). The romantic song returns one final time."
+- radio: "Play clip I (Careless Whisper) for 20s. The romantic song returns one final time."
 
 ### Beat 12 — "spaghetti" or "meatballs"
 - lamp: "Focus warm amber (255, 180, 60) light on the dish. Intimate dining glow. Brightness 0.9."

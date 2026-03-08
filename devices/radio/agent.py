@@ -125,6 +125,12 @@ def _build_tools() -> list[dict]:
                             "maxItems": 4,
                             "description": "Codes of audio clips to play in sequence",
                         },
+                        "duration_seconds": {
+                            "type": "number",
+                            "minimum": 1,
+                            "maximum": 300,
+                            "description": "Max playback duration in seconds. If omitted, plays the full clip(s). Use this to play just a snippet of a long song.",
+                        },
                     },
                     "required": ["selections"],
                 },
@@ -223,12 +229,13 @@ def _execute_tool_call(name: str, args: dict[str, Any], runtime: Any) -> str:
     try:
         if name == "play":
             selections = args.get("selections", [])
+            duration = args.get("duration_seconds")
             # Backward compat: accept old single "selection" param
             if not selections and "selection" in args:
                 selections = [str(args["selection"])]
             if not selections:
                 return "Play error: no selections provided"
-            result = runtime.play_codes(selections)
+            result = runtime.play_codes(selections, duration_seconds=duration)
             catalog = _get_clip_catalog()
             parts = []
             for code in selections:

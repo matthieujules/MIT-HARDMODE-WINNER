@@ -79,15 +79,28 @@ class RadioAudio:
             "track": None,
         }
 
-    def play_files(self, files: Iterable[Path], on_play_start: Callable[[int, Path], None] | None = None) -> dict:
+    def play_files(
+        self,
+        files: Iterable[Path],
+        on_play_start: Callable[[int, Path], None] | None = None,
+        duration_seconds: float | None = None,
+    ) -> dict:
         played: list[str] = []
         missing: list[str] = []
+        remaining = duration_seconds
         for index, path in enumerate(files):
             if path.exists():
                 if on_play_start is not None:
                     on_play_start(index, path)
-                self._play_path(path)
+                t0 = __import__('time').monotonic()
+                self._play_path(path, duration_seconds=remaining)
                 played.append(str(path))
+                # Subtract elapsed time from remaining duration budget
+                if remaining is not None:
+                    elapsed = __import__('time').monotonic() - t0
+                    remaining = max(0, remaining - elapsed)
+                    if remaining <= 0:
+                        break
             else:
                 missing.append(str(path))
         return {
@@ -130,10 +143,11 @@ class RadioAudio:
             out_path.write_bytes(response.content)
         return out_path
 
-    def _play_path(self, path: Path) -> None:
+    def _play_path(self, path: Path, duration_seconds: float | None = None) -> None:
         # Sim mode: log the clip instead of playing audio
         if os.environ.get("RADIO_SIM", "").strip().lower() in {"1", "true", "yes"}:
-            logger.info("[SIM] Would play: %s", path.name)
+            dur_str = f" (max {duration_seconds}s)" if duration_seconds else ""
+            logger.info("[SIM] Would play: %s%s", path.name, dur_str)
             return
 
         player = self._player_command(path)
@@ -144,7 +158,19 @@ class RadioAudio:
         process = subprocess.Popen(player)
         with self._process_lock:
             self._current_process = process
-        return_code = process.wait()
+        try:
+            return_code = process.wait(timeout=duration_seconds)
+        except subprocess.TimeoutExpired:
+            # Duration limit reached — kill gracefully
+            process.terminate()
+            try:
+                process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            with self._process_lock:
+                if self._current_process is process:
+                    self._current_process = None
+            return
         with self._process_lock:
             if self._current_process is process:
                 self._current_process = None

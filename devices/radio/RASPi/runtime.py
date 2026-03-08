@@ -39,7 +39,7 @@ class RadioRuntime:
         """Play a single pre-selected clip code. Kept for Layer 1 direct commands."""
         return self.play_codes([code])
 
-    def play_codes(self, codes: list[str]) -> dict[str, Any]:
+    def play_codes(self, codes: list[str], duration_seconds: float | None = None) -> dict[str, Any]:
         """Play one or more clip codes. Glitch interleaved before each clip."""
         self.audio.clear_interrupt()
         self.dial.attach()
@@ -48,7 +48,7 @@ class RadioRuntime:
         execution = result.get("execution", {})
         playback = execution.get("playback", {})
 
-        native_playback = self._execute_playback(plan, playback, execution)
+        native_playback = self._execute_playback(plan, playback, execution, duration_seconds=duration_seconds)
         self._wait_for_dial_threads()
         self.dial.detach()
         result["raspi"] = {
@@ -72,7 +72,7 @@ class RadioRuntime:
             else:
                 self.dial.nudge_counterclockwise()
 
-    def _execute_playback(self, plan: dict, playback: dict, execution: dict) -> dict[str, Any]:
+    def _execute_playback(self, plan: dict, playback: dict, execution: dict, duration_seconds: float | None = None) -> dict[str, Any]:
         action = plan.get("action")
         try:
             if action == "output_music":
@@ -94,7 +94,7 @@ class RadioRuntime:
                     if 0 <= index < len(clip_meta) and str(clip_meta[index].get("kind", "")).lower() == "glitch":
                         self._trigger_glitch_spin()
 
-                return self.audio.play_files(files, on_play_start=_on_clip_start)
+                return self.audio.play_files(files, on_play_start=_on_clip_start, duration_seconds=duration_seconds)
         except PlaybackInterrupted:
             return {
                 "status": "interrupted",
