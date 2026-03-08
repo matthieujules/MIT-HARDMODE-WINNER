@@ -26,7 +26,7 @@ from pathlib import Path
 
 from lerobot.robots import so_follower, make_robot_from_config
 
-DEFAULT_PORT = "/dev/ttyACM1"
+DEFAULT_PORT = "/dev/ttyACM0"
 POSES_PATH = Path(__file__).parent / "poses.json"
 
 

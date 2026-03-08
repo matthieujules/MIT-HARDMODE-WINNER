@@ -20,7 +20,7 @@ from pathlib import Path
 from lerobot.robots import so_follower, make_robot_from_config
 from motion import interpolate_to, get_current_positions, max_joint_delta
 
-DEFAULT_PORT = "/dev/ttyACM1"
+DEFAULT_PORT = "/dev/ttyACM0"
 POSES_PATH = Path(__file__).parent / "poses.json"
 
 

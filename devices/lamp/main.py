@@ -54,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def print_banner(config: dict, simulate: bool) -> None:
-    serial_port = config.get("arm", {}).get("serial_port", "/dev/ttyACM1")
+    serial_port = config.get("arm", {}).get("serial_port", "/dev/ttyACM0")
     led_pins = config.get("led", {}).get("pins", {})
     print("Lamp / LEM arm runtime")
     print(f"Mode: {'simulation' if simulate else 'live hardware'}")

@@ -213,7 +213,7 @@ class LEMHardwareController:
         # Robot (lerobot Robot API)
         try:
             from lerobot.robots import so_follower, make_robot_from_config
-            port = config.get("arm", {}).get("serial_port", "/dev/ttyACM1")
+            port = config.get("arm", {}).get("serial_port", "/dev/ttyACM0")
             robot_config = so_follower.SO100FollowerConfig(port=port)
             self._robot = make_robot_from_config(robot_config)
             self._robot.connect()

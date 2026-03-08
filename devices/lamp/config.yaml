@@ -22,7 +22,7 @@ led:
 
 # -- Arm hardware ----------------------------------------------------------
 arm:
-  serial_port: "/dev/ttyACM1"
+  serial_port: "/dev/ttyACM0"
   baud_rate: 1000000
   motor_model: "sts3215"
 

@@ -4,13 +4,13 @@ Calibrate the SO-100 follower arm using lerobot's built-in robot calibration.
 
 Usage:
     python calibrate.py                          # calibrate using so100_follower
-    python calibrate.py --port /dev/ttyACM1      # override serial port
+    python calibrate.py --port /dev/ttyACM0      # override serial port
 """
 
 import argparse
 from lerobot.robots import so_follower, make_robot_from_config
 
-DEFAULT_PORT = "/dev/ttyACM1"
+DEFAULT_PORT = "/dev/ttyACM0"
 
 
 def main():
