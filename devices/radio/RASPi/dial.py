@@ -41,6 +41,8 @@ class RadioDial:
 
         self.attach()
         self.stop()
+        # Detach immediately so the servo isn't held at neutral (causes drift)
+        self.detach()
 
     def nudge_clockwise(self, duration_seconds: float | None = None) -> None:
         self._spin("clockwise", self.config.clockwise_value, duration_seconds or self.config.turn_duration_seconds)
@@ -85,6 +87,8 @@ class RadioDial:
             time.sleep(duration_seconds)
             self._set_channel_value(self.config.stop_value)
             time.sleep(self.config.settle_seconds)
+            # Detach after spin so servo isn't held (prevents drift)
+            self.detach()
 
         self._history.append(
             DialEvent(

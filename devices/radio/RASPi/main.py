@@ -85,10 +85,10 @@ def main() -> int:
 
         command = resolve_command(args)
         if not command:
-            print("No command provided. Pass text directly, use --stdin, --loop, or --connect.", file=sys.stderr)
+            print("No command provided. Pass a clip code (A-G, 01-19), use --stdin, --loop, or --connect.", file=sys.stderr)
             return 1
 
-        result = runtime.handle_command(command)
+        result = runtime.play_code(command)
         print(json.dumps(result, indent=2))
         return 0
     finally:
@@ -96,7 +96,7 @@ def main() -> int:
 
 
 def run_loop(runtime: RadioRuntime) -> int:
-    print("Radio RASPi runtime ready. Type commands anytime; new command interrupts current playback. Ctrl-D exits.")
+    print("Radio RASPi runtime ready. Type clip codes (A-G, 01-19, stop). Ctrl-D exits.")
 
     latest_command: str | None = None
     command_lock = threading.Lock()
@@ -115,7 +115,7 @@ def run_loop(runtime: RadioRuntime) -> int:
                 command_event.clear()
             if not command:
                 continue
-            result = runtime.handle_command(command)
+            result = runtime.play_code(command)
             print(json.dumps(result, indent=2))
 
     worker_thread = threading.Thread(target=worker, daemon=True)

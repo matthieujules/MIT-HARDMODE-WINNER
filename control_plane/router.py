@@ -1,8 +1,9 @@
-"""Transcript safety and voice lock helpers."""
+"""Transcript safety, voice lock, and direct command routing."""
 
 import logging
 import re
 import time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,52 @@ EMERGENCY_STOP_PATTERN = re.compile(
 def is_emergency_stop(text: str) -> bool:
     """Return True if transcript matches an emergency stop pattern."""
     return bool(EMERGENCY_STOP_PATTERN.search(text))
+
+
+# ── Direct commands (bypass master reasoning) ────────────────────
+
+_DIRECT_COMMANDS: list[tuple[re.Pattern, str, str, dict[str, Any]]] = [
+    # Radio: stop music
+    (re.compile(r"\b(stop|turn off|cut|kill)\b.{0,10}\b(music|song|radio|audio|playing)\b", re.I),
+     "radio", "stop", {}),
+    (re.compile(r"\b(music|song|radio|audio)\b.{0,10}\b(off|stop)\b", re.I),
+     "radio", "stop", {}),
+    (re.compile(r"\b(quiet|silence|shut\s*up|hush)\b", re.I),
+     "radio", "stop", {}),
+
+    # Lamp: lights off
+    (re.compile(r"\b(turn off|switch off|kill)\b.{0,10}\b(lights?|lamp)\b", re.I),
+     "lamp", "set_brightness", {"brightness": 0}),
+    (re.compile(r"\b(lights?|lamp)\b.{0,10}\b(off)\b", re.I),
+     "lamp", "set_brightness", {"brightness": 0}),
+
+    # Lamp: reset
+    (re.compile(r"\b(lamp|light)\s*(reset|home)\b", re.I),
+     "lamp", "reset_pose", {}),
+    (re.compile(r"\breset\b.{0,10}\b(lamp|light)\b", re.I),
+     "lamp", "reset_pose", {}),
+
+    # Mirror: screen off
+    (re.compile(r"\b(turn off|switch off|hide|dismiss|clear)\b.{0,10}\b(screen|mirror|display)\b", re.I),
+     "mirror", "stop", {}),
+    (re.compile(r"\b(screen|mirror|display)\b.{0,10}\b(off|hide|dismiss|clear)\b", re.I),
+     "mirror", "stop", {}),
+
+    # Rover: stop
+    (re.compile(r"\b(rover|car|robot)\b.{0,10}\b(stop|halt|freeze)\b", re.I),
+     "rover", "stop", {}),
+    (re.compile(r"\b(stop|halt|freeze)\b.{0,10}\b(rover|car|robot)\b", re.I),
+     "rover", "stop", {}),
+]
+
+
+def match_direct_command(text: str) -> tuple[str, str, dict[str, Any]] | None:
+    """Match transcript to a direct device command. Returns (device_id, action, params) or None."""
+    for pattern, device_id, action, params in _DIRECT_COMMANDS:
+        if pattern.search(text):
+            logger.info("Direct command matched: %s -> %s(%s)", text[:60], device_id, action)
+            return (device_id, action, params)
+    return None
 
 # ── Voice lock ────────────────────────────────────────────────────
 

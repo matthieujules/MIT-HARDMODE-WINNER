@@ -28,7 +28,7 @@ Only the `.mmd` sources are tracked. Rendered exports should be treated as dispo
 |------|---------|
 | `control_plane/schemas.py` | Pydantic v2 models for all protocol messages |
 | `control_plane/state.py` | File-backed state persistence (state.json, devices.json, event_log.jsonl, master_log.jsonl) |
-| `control_plane/router.py` | Emergency stop + voice lock helpers (deterministic routing removed) |
+| `control_plane/router.py` | Emergency stop, direct command routing (stop music, lights off, etc.), voice lock helpers |
 | `control_plane/app.py` | FastAPI app: endpoints, WebSocket ConnectionManager, transcript debouncer, event pipeline |
 | `control_plane/master.py` | Master reasoning engine (multi-provider: Anthropic + Cerebras) |
 | `control_plane/SOUL.md` | Master home personality, multi-person rules, tool-use rules |
@@ -118,14 +118,14 @@ Boot: `ssh rover@roverhost 'cd ~/Rover && MASTER_URL="http://claude-master:8000"
 
 | File | Purpose |
 |------|---------|
-| `devices/radio/ws_client.py` | WebSocket client: register, connect, heartbeat, auto-reconnect |
-| `devices/radio/agent.py` | LLM agent loop (Cerebras gpt-oss-120b), tools: `play`, `stop`, `spin_dial`, `done` |
+| `devices/radio/ws_client.py` | WebSocket client: register, connect, heartbeat, auto-reconnect, spawn preemption |
+| `devices/radio/agent.py` | LLM agent loop (Cerebras gpt-oss-120b), tools: `play(selection)`, `stop`, `spin_dial`, `done`. Clip catalog built dynamically from Sounds/ |
 | `devices/radio/planner.py` | Regex planner for Layer 1 direct commands |
-| `devices/radio/brain.py` | Audio decision engine: routes requests to pre-recorded clips via OpenAI |
+| `devices/radio/brain.py` | Audio clip catalog + playback assembly (scans Sounds/, builds clip manifests with glitch). No LLM |
 | `devices/radio/config.yaml` | Hardware config (USB speaker, PCA9685 servo dial) |
 | `devices/radio/SOUL.md` | Radio personality: Bumblebee — communicates through found audio clips |
-| `devices/radio/RASPi/main.py` | Pi entry point: `--connect` for WS runtime, `--loop` for interactive, CLI for single commands |
-| `devices/radio/RASPi/runtime.py` | Hardware executor: plays audio, triggers dial spins |
+| `devices/radio/RASPi/main.py` | Pi entry point: `--connect` for WS runtime, `--loop` for clip codes, CLI for single commands |
+| `devices/radio/RASPi/runtime.py` | Hardware executor: `play_code(code)` plays audio + triggers dial spins on glitch clips |
 | `devices/radio/RASPi/audio.py` | Local audio playback (mpg123/ffplay/cvlc) |
 | `devices/radio/RASPi/dial.py` | PCA9685 servo control for physical dial (requires adafruit-circuitpython-pca9685) |
 | `devices/radio/Sounds/` | Audio asset library (29 pre-recorded clips: 7 music A-G, 19 soundbites, 1 glitch) |
@@ -133,7 +133,7 @@ Boot: `ssh rover@roverhost 'cd ~/Rover && MASTER_URL="http://claude-master:8000"
 Pi: `radiohost` / `100.119.150.35`, SSH: `radio@radiohost` (password: radio)
 Venv: `~/radio-venv` (--system-site-packages), files in `~/Desktop/radio/`
 Boot: `ssh radio@radiohost 'cd ~/Desktop/radio/RASPi && MASTER_URL="http://claude-master:8000" ~/radio-venv/bin/python3 main.py --connect'`
-Deploy: `sshpass -p radio scp devices/radio/{brain.py,ws_client.py,agent.py,planner.py,SOUL.md,config.yaml} radio@radiohost:~/Desktop/radio/ && sshpass -p radio scp devices/radio/RASPi/main.py radio@radiohost:~/Desktop/radio/RASPi/`
+Deploy: `sshpass -p radio scp devices/radio/{brain.py,ws_client.py,agent.py,planner.py,SOUL.md,config.yaml} radio@radiohost:~/Desktop/radio/ && sshpass -p radio scp devices/radio/RASPi/{main.py,runtime.py} radio@radiohost:~/Desktop/radio/RASPi/`
 
 ### Networking
 
@@ -222,7 +222,7 @@ RADIO_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for radio
 
 - Optimize for demo reliability over theoretical elegance.
 - Keep one shared brain on the laptop.
-- All transcripts go to master reasoning (no deterministic routing).
+- Direct commands (stop music, lights off, lamp reset, screen off, car stop) route instantly to devices. Everything else goes to master reasoning.
 - No silent fallbacks — fail loud or don't fail.
 - Keep master execution serial.
 - Keep state explicit and file-backed.
@@ -256,7 +256,9 @@ RADIO_AGENT_MODEL=gpt-oss-120b  # Default. Cerebras model for radio
 - **Radio SSH: `radio@radiohost`** — password `radio`. Files deployed to `~/Desktop/radio/`, venv at `~/radio-venv`.
 - **Radio PCA9685 requires adafruit libs** — `adafruit-circuitpython-pca9685` and `adafruit-extended-bus` must be installed in venv. Without them, dial.py silently falls back to `enabled=False` (logs spins but doesn't drive hardware).
 - **Radio dial drifts after process kill** — PCA9685 holds residual PWM. Must explicitly `dial.stop(); dial.detach(); dial.close()` or power cycle to stop.
-- **Radio brain.py responses API returns 400** — falls back to chat.completions API automatically. Not a bug, just OpenAI responses API quirk.
+- **Radio brain.py is NOT an LLM** — it's a clip catalog utility. The Cerebras agent in agent.py picks clips directly (no OpenAI). brain.py just scans Sounds/ and assembles playback manifests.
+- **Radio spawns preempt previous spawns** — new spawn cancels the old one + interrupts playback. Without this, a 3-minute music track blocks the WS handler.
+- **Killing radio Python doesn't kill audio** — mpg123/ffplay/cvlc child processes survive. Must `pkill -9 mpg123; pkill -9 ffplay; pkill -9 cvlc` separately.
 - **Radio files split across two dirs** — new integration files (ws_client, agent, planner) at `devices/radio/`, hardware files (runtime, audio, dial, config) at `devices/radio/RASPi/`. main.py adds both to sys.path.
 - **Lamp serial port can shift** — `/dev/ttyACM0` may become `/dev/ttyACM1` after reboot or if stale `move.py` processes hold the port. Check `ls /dev/ttyACM*` and update `config.yaml` on Pi if needed. Kill any leftover `move.py` processes before restarting.
 - **Stale processes lock lamp serial bus** — old `move.py` or crashed lamp processes hold `/dev/ttyACM*` open. New lamp process falls back to sim mode ("falling back to sim for arm"). Fix: `pkill -u lamp python3`, wait, restart.

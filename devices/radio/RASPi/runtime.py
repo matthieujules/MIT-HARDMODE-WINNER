@@ -16,7 +16,7 @@ RADIO_DIR = Path(__file__).resolve().parent.parent
 if str(RADIO_DIR) not in sys.path:
     sys.path.insert(0, str(RADIO_DIR))
 
-from brain import run_radio_command  # noqa: E402
+from brain import build_playback_for_code  # noqa: E402
 
 
 class RadioRuntime:
@@ -35,18 +35,14 @@ class RadioRuntime:
         config = load_runtime_config(radio_dir / "config.yaml")
         return cls(config)
 
-    def handle_command(self, command: str) -> dict[str, Any]:
+    def play_code(self, code: str) -> dict[str, Any]:
+        """Play a pre-selected clip code. Assembles glitch + clip, plays audio, spins dial."""
         self.audio.clear_interrupt()
         self.dial.attach()
-        result = run_radio_command(command)
+        result = build_playback_for_code(code)
         plan = result.get("plan", {})
         execution = result.get("execution", {})
         playback = execution.get("playback", {})
-
-        dial_events = execution.get("dial_events") or playback.get("dial_events") or []
-        for event in dial_events:
-            degrees = int(event.get("degrees", 55))
-            self._perform_dial_step(degrees)
 
         native_playback = self._execute_playback(plan, playback, execution)
         self._wait_for_dial_threads()

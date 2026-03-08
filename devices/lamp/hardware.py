@@ -127,7 +127,9 @@ class LEMHardwareController:
         # Static pose: {joint.pos: value, ...}
         if isinstance(pose_data, dict):
             clean = _strip_gripper(pose_data)
-            self._move_to_joints(clean, duration_ms=1500)
+            error = self._move_to_joints(clean, duration_ms=1500)
+            if error:
+                return error
             self.current_joints = _strip_pos_suffix(clean)
             return f"Moved to pose '{name}'"
 
@@ -230,10 +232,11 @@ class LEMHardwareController:
 
     # -- Joint control (Robot API) ------------------------------------------
 
-    def _move_to_joints(self, target: dict[str, float], duration_ms: int = 1000) -> None:
+    def _move_to_joints(self, target: dict[str, float], duration_ms: int = 1000) -> str | None:
         """Move to target joint positions. Interpolates for smooth motion.
 
         target: dict with .pos suffix keys and float values
+        Returns None on success, or an error string on failure.
         """
         if self.simulate or self._robot is None:
             logger.info(
@@ -241,7 +244,7 @@ class LEMHardwareController:
                 json.dumps({k: round(v, 2) for k, v in target.items()}),
                 duration_ms,
             )
-            return
+            return None
 
         try:
             # Get current position for interpolation
@@ -277,6 +280,7 @@ class LEMHardwareController:
                     time.sleep(sleep_time)
 
             logger.info("HW joints moved to: %s", {k: round(v, 2) for k, v in target_pos.items()})
+            return None
 
         except Exception as e:
             logger.error("Failed to move joints: %s", e)
@@ -285,8 +289,12 @@ class LEMHardwareController:
                 target_pos = _ensure_pos_suffix(_strip_gripper(target))
                 self._robot.send_action(target_pos)
                 logger.info("HW joints (direct): %s", {k: round(v, 2) for k, v in target_pos.items()})
+                return None
             except Exception as e2:
                 logger.error("Direct move also failed: %s", e2)
+                # Attempt to reconnect the serial port
+                self._try_reconnect_robot()
+                return f"ARM ERROR: serial port failure ({e2}). Arm did not move."
 
     def _play_animation(self, name: str, anim_data: dict) -> str:
         """Play an animation from poses.json."""
@@ -302,6 +310,7 @@ class LEMHardwareController:
         interval = 1.0 / fps
         logger.info("Playing animation '%s': %d frames @ %dfps", name, len(frames), fps)
 
+        failed = False
         for frame in frames:
             clean = _strip_gripper(frame)
             pose = _ensure_pos_suffix(clean)
@@ -310,17 +319,38 @@ class LEMHardwareController:
                 self._robot.send_action(pose)
             except Exception as e:
                 logger.error("Animation frame error: %s", e)
+                self._try_reconnect_robot()
+                failed = True
                 break
             elapsed = time.perf_counter() - frame_start
             sleep_time = interval - elapsed
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
+        if failed:
+            return f"ARM ERROR: animation '{name}' failed mid-playback. Arm may be in unexpected position."
+
         # Update current joints from last frame
         last_frame = _strip_gripper(frames[-1])
         self.current_joints = _strip_pos_suffix(last_frame)
 
         return f"Played animation '{name}' ({len(frames)} frames @ {fps}fps)"
+
+    def _try_reconnect_robot(self) -> None:
+        """Attempt to disconnect and reconnect the robot after a serial failure."""
+        if self._robot is None:
+            return
+        logger.warning("Attempting robot reconnect after serial failure...")
+        try:
+            self._robot.disconnect()
+        except Exception:
+            pass
+        try:
+            self._robot.connect()
+            logger.info("Robot reconnected successfully")
+        except Exception as e:
+            logger.error("Robot reconnect failed: %s — arm is offline", e)
+            self._robot = None
 
     # -- LED control --------------------------------------------------------
 

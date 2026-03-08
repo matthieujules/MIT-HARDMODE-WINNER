@@ -2,7 +2,7 @@
 
 Receives a spawn instruction from the control plane, uses a fast LLM
 (Cerebras gpt-oss-120b) to decide audio actions, then executes them via
-brain.py and RadioRuntime.  Fails loudly if no API key is available.
+the runtime.  The agent selects clips directly — no secondary LLM.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ SOUL_PATH = Path(__file__).resolve().with_name("SOUL.md")
 
 _client = None
 _soul_text = None
+_clip_catalog = None
 
 
 def _get_client():
@@ -54,6 +55,19 @@ def _get_soul() -> str:
     return _soul_text
 
 
+def _get_clip_catalog() -> list[dict[str, str]]:
+    """Lazy-load clip catalog from brain.py."""
+    global _clip_catalog
+    if _clip_catalog is None:
+        try:
+            from brain import get_clip_catalog
+            _clip_catalog = get_clip_catalog()
+        except Exception as e:
+            logger.warning("Failed to load clip catalog: %s", e)
+            _clip_catalog = []
+    return _clip_catalog
+
+
 def warmup():
     """Send a tiny request to warm up the Cerebras connection.
 
@@ -76,86 +90,91 @@ def warmup():
 
 # -- Tool definitions exposed to the model ---------------------------------
 
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "play",
-            "description": (
-                "Play audio through the radio. Routes through the brain to select "
-                "the best matching pre-recorded clip (soundbite or music track) and "
-                "plays it with glitch effects and dial spins. Handles music, soundbites, "
-                "and ambient audio."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "instruction": {
-                        "type": "string",
-                        "description": (
-                            "Natural language description of what to play. "
-                            "Examples: 'play calm morning music', 'something energetic', "
-                            "'play a greeting', 'scary soundtrack'"
-                        ),
+def _build_tools() -> list[dict]:
+    """Build tool definitions dynamically based on available clips."""
+    catalog = _get_clip_catalog()
+    codes = [entry["code"] for entry in catalog]
+    if not codes:
+        codes = ["A", "B", "C", "D", "E", "F", "G"]
+
+    catalog_desc = ", ".join(f"{e['code']}={e['label']}" for e in catalog) if catalog else "A-G music tracks"
+
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "play",
+                "description": (
+                    "Play a specific audio clip through the radio. "
+                    "A glitch effect and dial spin play automatically before the clip. "
+                    f"Available: {catalog_desc}"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "selection": {
+                            "type": "string",
+                            "enum": codes,
+                            "description": "Code of the audio clip to play",
+                        },
                     },
+                    "required": ["selection"],
                 },
-                "required": ["instruction"],
             },
         },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "stop",
-            "description": "Stop any currently playing audio immediately.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
+        {
+            "type": "function",
+            "function": {
+                "name": "stop",
+                "description": "Stop any currently playing audio immediately.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                },
             },
         },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "spin_dial",
-            "description": (
-                "Spin the physical radio dial for visual effect. "
-                "The dial is a continuous-rotation servo that gives the radio character."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "direction": {
-                        "type": "string",
-                        "enum": ["clockwise", "counterclockwise"],
-                        "description": "Direction to spin the dial",
+        {
+            "type": "function",
+            "function": {
+                "name": "spin_dial",
+                "description": (
+                    "Spin the physical radio dial for visual effect. "
+                    "The dial is a continuous-rotation servo that gives the radio character."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "direction": {
+                            "type": "string",
+                            "enum": ["clockwise", "counterclockwise"],
+                            "description": "Direction to spin the dial",
+                        },
+                        "duration_seconds": {
+                            "type": "number",
+                            "minimum": 0.1,
+                            "maximum": 3.0,
+                            "description": "How long to spin (default 0.6s)",
+                        },
                     },
-                    "duration_seconds": {
-                        "type": "number",
-                        "minimum": 0.1,
-                        "maximum": 3.0,
-                        "description": "How long to spin (default 0.6s)",
+                    "required": ["direction"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "done",
+                "description": "Signal that the instruction has been fully completed. MUST be called when finished.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "detail": {"type": "string", "description": "Brief summary of what was done"},
                     },
+                    "required": ["detail"],
                 },
-                "required": ["direction"],
             },
         },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "done",
-            "description": "Signal that the instruction has been fully completed. MUST be called when finished.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "detail": {"type": "string", "description": "Brief summary of what was done"},
-                },
-                "required": ["detail"],
-            },
-        },
-    },
-]
+    ]
 
 
 def _load_soul() -> str:
@@ -166,13 +185,24 @@ def _load_soul() -> str:
 
 
 def _build_system_prompt(soul: str) -> str:
+    catalog = _get_clip_catalog()
+    if catalog:
+        catalog_lines = [
+            f"- {e['code']}: {e['label']} ({e['kind']})"
+            for e in catalog
+        ]
+        catalog_text = "\n".join(catalog_lines)
+    else:
+        catalog_text = "(no clips loaded)"
+
     return (
         f"{soul}\n\n"
+        f"## Available Audio Clips\n{catalog_text}\n\n"
         f"## Rules\n"
         f"- You have tools to control the radio's audio playback and physical dial.\n"
-        f"- Use `play` for any audio request — it routes through the brain to select the best clip.\n"
+        f"- Use `play` with a clip code to play audio — pick the clip that best matches the instruction.\n"
         f"- Use `stop` to halt current playback.\n"
-        f"- Use `spin_dial` for visual flair — the dial also spins automatically on glitch clips.\n"
+        f"- Use `spin_dial` for visual flair — the dial also spins automatically before clips.\n"
         f"- You MUST call the `done` tool as your final tool call to signal completion.\n"
         f"- Be decisive. Prefer one `play` call plus `done` over many iterations.\n"
         f"- If the instruction is ambiguous, pick the most reasonable interpretation.\n"
@@ -184,11 +214,15 @@ def _execute_tool_call(name: str, args: dict[str, Any], runtime: Any) -> str:
     """Execute a single tool call against the runtime. Returns a result string."""
     try:
         if name == "play":
-            instruction = str(args.get("instruction", ""))
-            result = runtime.handle_command(instruction)
-            status = "ok" if result.get("ok") else "error"
-            selection = result.get("selection", "unknown")
-            return f"Play {status}: selection={selection}, command='{instruction}'"
+            code = str(args.get("selection", ""))
+            result = runtime.play_code(code)
+            if result.get("ok"):
+                catalog = _get_clip_catalog()
+                label = next((e["label"] for e in catalog if e["code"] == code), "unknown")
+                kind = next((e["kind"] for e in catalog if e["code"] == code), "unknown")
+                return f"Play ok: {code} — {label} ({kind})"
+            else:
+                return f"Play error: {result.get('error', 'unknown error')}"
 
         elif name == "stop":
             runtime.interrupt_playback()
@@ -223,6 +257,7 @@ def _run_llm_loop(
     """Run the LLM-backed agent loop with conversation history. Returns rich result."""
     client = _get_client()
     soul = _get_soul()
+    tools = _build_tools()
     start_time = time.monotonic()
     deadline_s = time_budget_ms / 1000.0
     execution_log: list[dict[str, Any]] = []
@@ -261,7 +296,7 @@ def _run_llm_loop(
             response = client.chat.completions.create(
                 model=RADIO_AGENT_MODEL,
                 messages=messages,
-                tools=TOOLS,
+                tools=tools,
                 tool_choice="required",
                 timeout=api_timeout,
             )

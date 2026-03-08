@@ -25,6 +25,7 @@ from .router import (
     check_voice_lock,
     clear_voice_lock,
     is_emergency_stop,
+    match_direct_command,
     set_voice_lock,
 )
 from .schemas import (
@@ -211,6 +212,14 @@ async def _handle_transcript(event: DeviceEvent) -> dict:
         for device in devices:
             await dispatch_command(device.device_id, "stop", {})
         return {"status": "ok", "detail": "emergency stop broadcast to all devices"}
+
+    # Direct commands — instant dispatch, no master reasoning
+    direct = match_direct_command(text)
+    if direct is not None:
+        device_id, action, params = direct
+        logger.info("Direct command: %s -> %s(%s)", device_id, action, params)
+        await dispatch_command(device_id, action, params)
+        return {"status": "ok", "detail": f"direct command: {device_id}.{action}"}
 
     if check_voice_lock(state_manager):
         logger.info("Transcript dropped (voice lock active): %r", text)

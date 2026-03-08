@@ -38,7 +38,7 @@ if _brain_spec is None or _brain_spec.loader is None:
 _brain_module = importlib.util.module_from_spec(_brain_spec)
 sys.modules[_brain_spec.name] = _brain_module
 _brain_spec.loader.exec_module(_brain_module)
-run_radio_command = _brain_module.run_radio_command
+build_playback_for_code = _brain_module.build_playback_for_code
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
@@ -64,18 +64,7 @@ def web_config() -> Dict[str, Any]:
 
 @app.post("/api/radio/command")
 def handle_command(body: CommandRequest) -> Dict[str, Any]:
-    result = run_radio_command(body.command)
+    result = build_playback_for_code(body.command)
     result["_app_build"] = APP_BUILD
-
-    execution = result.setdefault("execution", {})
-    llm_called = bool(execution.get("llm_called"))
-    final_selection = execution.get("final_selection") or result.get("selection")
-
-    execution["llm_decision"] = execution.get("llm_decision") or "[no-llm-output]"
-    execution["llm_token"] = execution.get("llm_token") or "[none]"
-    execution["final_selection"] = final_selection or "[none]"
-    execution["selection_source"] = execution.get("selection_source") or (
-        "llm" if llm_called and execution.get("llm_token") else ("fallback:unknown" if llm_called else "direct")
-    )
 
     return result

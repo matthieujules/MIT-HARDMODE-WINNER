@@ -125,10 +125,9 @@ def handle_command(action: str, params: dict[str, Any], runtime: Any) -> dict[st
             detail = "Playback stopped"
 
         elif action in ("play", "play_music", "speak"):
-            instruction = params.get("instruction", params.get("text", params.get("genre", "")))
-            result = runtime.handle_command(str(instruction))
-            selection = result.get("selection", "unknown")
-            detail = f"Played audio: selection={selection}"
+            selection = params.get("selection", params.get("instruction", params.get("text", "01")))
+            result = runtime.play_code(str(selection))
+            detail = f"Played audio: selection={result.get('selection', 'unknown')}"
 
         elif action in ("spin_dial", "turn_dial"):
             direction = params.get("direction", "clockwise")
@@ -142,10 +141,7 @@ def handle_command(action: str, params: dict[str, Any], runtime: Any) -> dict[st
             detail = f"Dial spun {direction} for {duration}s"
 
         else:
-            # Try as a general play command via brain
-            result = runtime.handle_command(action)
-            selection = result.get("selection", "unknown")
-            detail = f"Played audio: selection={selection}"
+            detail = f"Unknown action: {action}"
 
         elapsed = time.monotonic() - start_time
         return {
@@ -221,6 +217,48 @@ async def _heartbeat_task(
         await _send_heartbeat(ws, device_id)
 
 
+_active_spawn_task: asyncio.Task | None = None
+
+
+async def _run_spawn(
+    instruction: str,
+    runtime: Any,
+    max_iterations: int,
+    time_budget_ms: int,
+    ws: websockets.WebSocketClientProtocol,
+    device_id: str,
+    request_id: str,
+) -> None:
+    """Run a spawn in the background. Sends action_result when done."""
+    try:
+        result = await asyncio.to_thread(
+            run_agent_loop,
+            instruction,
+            runtime,
+            max_iterations,
+            time_budget_ms,
+        )
+        result["layer"] = "agent_loop"
+        result["instruction"] = instruction
+        await _send_action_result(ws, device_id, request_id, result)
+    except asyncio.CancelledError:
+        logger.info("Spawn cancelled: request_id=%s", request_id)
+        await _send_action_result(ws, device_id, request_id, {
+            "status": "cancelled",
+            "detail": "preempted by newer spawn",
+            "layer": "agent_loop",
+            "instruction": instruction,
+        })
+    except Exception as e:
+        logger.error("Spawn error: %s", e, exc_info=True)
+        await _send_action_result(ws, device_id, request_id, {
+            "status": "error",
+            "detail": str(e),
+            "layer": "agent_loop",
+            "instruction": instruction,
+        })
+
+
 async def _handle_message(
     msg_data: dict,
     ws: websockets.WebSocketClientProtocol,
@@ -228,6 +266,7 @@ async def _handle_message(
     runtime: Any,
 ) -> None:
     """Route a single incoming message by type."""
+    global _active_spawn_task
     msg_type = msg_data.get("type")
     request_id = msg_data.get("request_id", "unknown")
 
@@ -245,16 +284,15 @@ async def _handle_message(
         time_budget_ms = msg_data.get("time_budget_ms", 45000)
         logger.info("Received spawn: %r request_id=%s", instruction[:80], request_id)
 
-        result = await asyncio.to_thread(
-            run_agent_loop,
-            instruction,
-            runtime,
-            max_iterations,
-            time_budget_ms,
+        # Cancel previous spawn + interrupt playback so new one starts immediately
+        if _active_spawn_task is not None and not _active_spawn_task.done():
+            logger.info("Cancelling previous spawn for new request")
+            _active_spawn_task.cancel()
+            runtime.interrupt_playback()
+
+        _active_spawn_task = asyncio.create_task(
+            _run_spawn(instruction, runtime, max_iterations, time_budget_ms, ws, device_id, request_id)
         )
-        result["layer"] = "agent_loop"
-        result["instruction"] = instruction
-        await _send_action_result(ws, device_id, request_id, result)
 
     else:
         logger.warning("Unknown message type: %s", msg_type)
