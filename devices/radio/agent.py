@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -228,14 +229,14 @@ def _execute_tool_call(name: str, args: dict[str, Any], runtime: Any) -> str:
             if not selections:
                 return "Play error: no selections provided"
             result = runtime.play_codes(selections)
-            if result.get("ok"):
-                catalog = _get_clip_catalog()
-                parts = []
-                for code in selections:
-                    label = next((e["label"] for e in catalog if e["code"] == code), "unknown")
-                    kind = next((e["kind"] for e in catalog if e["code"] == code), "unknown")
-                    parts.append(f"{code}={label} ({kind})")
-                return f"Play ok: {', '.join(parts)}"
+            catalog = _get_clip_catalog()
+            parts = []
+            for code in selections:
+                label = next((e["label"] for e in catalog if e["code"] == code), "unknown")
+                kind = next((e["kind"] for e in catalog if e["code"] == code), "unknown")
+                parts.append(f"{code}={label} ({kind})")
+            if result.get("ok") or result.get("raspi"):
+                return f"Playing now: {', '.join(parts)}. Playback started successfully. Call done() to finish."
             else:
                 return f"Play error: {result.get('error', 'unknown error')}"
 
@@ -268,6 +269,7 @@ def _run_llm_loop(
     runtime: Any,
     max_iterations: int,
     time_budget_ms: int,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     """Run the LLM-backed agent loop with conversation history. Returns rich result."""
     client = _get_client()
@@ -283,6 +285,18 @@ def _run_llm_loop(
     ]
 
     for iteration in range(max_iterations):
+        # Check if this spawn was preempted by a newer one
+        if cancel_event is not None and cancel_event.is_set():
+            elapsed = time.monotonic() - start_time
+            logger.info("Agent loop cancelled at iteration %d (preempted)", iteration)
+            return {
+                "status": "cancelled",
+                "detail": f"preempted at iteration {iteration}",
+                "execution_log": execution_log,
+                "iterations": iteration,
+                "elapsed_ms": round(elapsed * 1000),
+            }
+
         elapsed = time.monotonic() - start_time
         if elapsed >= deadline_s:
             status = "ok" if execution_log else "timeout"
@@ -386,8 +400,9 @@ def run_agent_loop(
     runtime: Any,
     max_iterations: int = 10,
     time_budget_ms: int = 15000,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     """Public entry point for the agent loop."""
     logger.info("Agent loop starting: instruction=%r, max_iter=%d, budget=%dms",
                 instruction, max_iterations, time_budget_ms)
-    return _run_llm_loop(instruction, runtime, max_iterations, time_budget_ms)
+    return _run_llm_loop(instruction, runtime, max_iterations, time_budget_ms, cancel_event)

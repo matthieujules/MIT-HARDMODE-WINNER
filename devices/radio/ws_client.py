@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -218,6 +219,7 @@ async def _heartbeat_task(
 
 
 _active_spawn_task: asyncio.Task | None = None
+_active_cancel_event: threading.Event | None = None
 
 
 async def _run_spawn(
@@ -228,6 +230,7 @@ async def _run_spawn(
     ws: websockets.WebSocketClientProtocol,
     device_id: str,
     request_id: str,
+    cancel_event: threading.Event,
 ) -> None:
     """Run a spawn in the background. Sends action_result when done."""
     try:
@@ -237,7 +240,11 @@ async def _run_spawn(
             runtime,
             max_iterations,
             time_budget_ms,
+            cancel_event,
         )
+        # If the thread noticed cancellation itself, don't double-report
+        if cancel_event.is_set():
+            return
         result["layer"] = "agent_loop"
         result["instruction"] = instruction
         await _send_action_result(ws, device_id, request_id, result)
@@ -284,14 +291,18 @@ async def _handle_message(
         time_budget_ms = msg_data.get("time_budget_ms", 45000)
         logger.info("Received spawn: %r request_id=%s", instruction[:80], request_id)
 
-        # Cancel previous spawn + interrupt playback so new one starts immediately
+        # Cancel previous spawn + signal its thread to stop + interrupt playback
         if _active_spawn_task is not None and not _active_spawn_task.done():
             logger.info("Cancelling previous spawn for new request")
+            if _active_cancel_event is not None:
+                _active_cancel_event.set()  # Signal the thread to exit
             _active_spawn_task.cancel()
             runtime.interrupt_playback()
 
+        # Fresh cancel event for the new spawn
+        _active_cancel_event = threading.Event()
         _active_spawn_task = asyncio.create_task(
-            _run_spawn(instruction, runtime, max_iterations, time_budget_ms, ws, device_id, request_id)
+            _run_spawn(instruction, runtime, max_iterations, time_budget_ms, ws, device_id, request_id, _active_cancel_event)
         )
 
     else:
