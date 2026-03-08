@@ -41,8 +41,16 @@ Only the `.mmd` sources are tracked. Rendered exports should be treated as dispo
 | `devices/lamp/main.py` | Entry point: `--connect` for WS runtime, CLI sim mode preserved |
 | `devices/lamp/ws_client.py` | WebSocket client: register, connect, heartbeat, auto-reconnect |
 | `devices/lamp/agent.py` | LLM agent loop (Cerebras gpt-oss-120b), tool execution, warmup |
-| `devices/lamp/hardware.py` | Hardware controller (SO-101 arm + RGB LED), sim mode |
+| `devices/lamp/hardware.py` | Hardware controller (SO-101 arm + RGB LED via lerobot), sim mode auto-detected |
 | `devices/lamp/planner.py` | Regex planner for direct commands (used by ws_client Layer 1) |
+| `devices/lamp/LED_control.py` | RPi.GPIO PWM RGB LED driver |
+| `devices/lamp/compat.py` | lerobot Feetech servo bus factory (`make_bus()`) |
+| `devices/lamp/calibrate.py` | Servo calibration utility |
+| `devices/lamp/move.py` | Direct servo movement CLI |
+| `devices/lamp/record.py` | Pose recording utility |
+| `devices/lamp/play_animation.py` | Replay recorded pose sequences |
+| `devices/lamp/test_led.py` | LED test sequences (red, green, blue, sine, rainbow) |
+| `devices/lamp/sync.sh` | rsync deploy script for Pi |
 
 Run: `cd devices/lamp && MASTER_URL="http://localhost:8000" python3 main.py --connect`
 
@@ -68,6 +76,7 @@ Run: `python3 -m vision.vision_service` (or `--test`, `--calibrate`)
 | File | Purpose |
 |------|---------|
 | `dashboard/map.js` | SVG room map, device icons, brain HUD terminal, device panels, rover animation |
+| `dashboard/state.js` | State pills (mode, mood, people count), polling updates |
 | `dashboard/timeline.js` | Event/dispatch feed, generates overlay data for map.js |
 | `dashboard/styles.css` | Dark theme, brain HUD, device panel cards, animations |
 | `dashboard/index.html` | Full-viewport layout, polling loop, transcript input |
@@ -98,7 +107,7 @@ cd devices/lamp && MASTER_URL="http://localhost:8000" python3 main.py --connect
 
 # 5. Register other devices (no runtime yet, but master can reason about them)
 curl -X POST localhost:8000/register -H 'Content-Type: application/json' \
-  -d '{"device_id":"mirror","device_name":"Mirror","device_type":"companion","capabilities":["see","display_image","move_tilt"],"actions":["display_image","tilt","nod"],"ip":"mirror-pi"}'
+  -d '{"device_id":"mirror","device_name":"Mirror","device_type":"picture_frame","capabilities":["see","display_image"],"actions":["display_image"],"ip":"mirror-pi"}'
 
 # 6. Test master reasoning (all transcripts go to master, no deterministic routing)
 curl -X POST localhost:8000/events -H 'Content-Type: application/json' \
@@ -130,7 +139,7 @@ MIRROR_CEREBRAS_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 
 ### Data Files (gitignored, in `data/`)
 
-- `state.json` — current home state (mode, mood, energy, voice_lock)
+- `state.json` — current home state (mode, mood, people_count, voice_lock)
 - `devices.json` — registered device info
 - `event_log.jsonl` — all incoming events
 - `master_log.jsonl` — full master reasoning turns (trigger, context, decisions, dispatches, latency)
@@ -138,7 +147,7 @@ MIRROR_CEREBRAS_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 ## What's Not Built Yet
 
 - **Mirror/Radio/Rover runtimes** — Lamp runtime is the template; other devices need their own
-- **TTS** — ElevenLabs/Piper integration for Mirror and Radio
+- **TTS** — ElevenLabs/Piper integration for Radio (mirror has no speaker)
 - **Tick scheduler** — periodic tick event generator (currently manual via curl)
 
 ## V1 Stack
@@ -151,6 +160,7 @@ MIRROR_CEREBRAS_MODEL=gpt-oss-120b  # Default. Cerebras model for mirror
 - Silero VAD + Groq Whisper sidecar for voice capture
 - Voice events preempt vision-triggered master turns (cancellation + lock release)
 - Lamp runtime on laptop (Cerebras gpt-oss-120b agent loop, tested end-to-end)
+- Mirror is a picture frame (camera + display, no speaker, no tilt servo)
 - Other device runtimes not yet built
 
 ## Design Principles
