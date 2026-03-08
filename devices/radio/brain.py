@@ -16,7 +16,8 @@ from typing import Any
 RADIO_DIR = Path(__file__).resolve().parent
 SOUNDS_DIR = RADIO_DIR / "Sounds"
 
-MUSIC_CODES = ("A", "B", "C", "D", "E", "F", "G")
+# Accept any single-letter alphabetic music code (A-Z).
+MUSIC_CODE_PATTERN = r"[A-Za-z]"
 
 
 @dataclass(frozen=True)
@@ -43,11 +44,11 @@ def _load_choices() -> tuple[dict[str, AudioChoice], AudioChoice | None]:
 			glitch = AudioChoice(code="00", path=path, kind="glitch", label=label)
 			continue
 
-		music_match = re.match(r"^([A-G])_", stem)
+		music_match = re.match(rf"^({MUSIC_CODE_PATTERN})_", stem)
 		if music_match:
-			code = music_match.group(1)
-			if code in MUSIC_CODES and code not in choices:
-				label = re.sub(r"^[A-G]_", "", stem).replace("_", " ").strip()
+			code = music_match.group(1).upper()
+			if code not in choices:
+				label = re.sub(rf"^{MUSIC_CODE_PATTERN}_", "", stem).replace("_", " ").strip()
 				choices[code] = AudioChoice(code=code, path=path, kind="music", label=label)
 			continue
 
