@@ -281,8 +281,16 @@ class MirrorDisplay:
 
         if self.state == self.GENERATED and self._generated_image is not None:
             if self._generated_surface is None:
+                img = self._generated_image
+                # If the compositor rotates the screen (e.g. wlr-randr 90°),
+                # Pygame sees landscape but physical screen is portrait.
+                # Rotate portrait images so they display correctly after compositor rotation.
+                pw, ph = img.size
+                ww, wh = self._window_size
+                if ph > pw and ww > wh:
+                    img = img.rotate(90, expand=True)
                 fitted = ImageOps.fit(
-                    self._generated_image,
+                    img,
                     self._window_size,
                     method=Image.Resampling.LANCZOS,
                 )

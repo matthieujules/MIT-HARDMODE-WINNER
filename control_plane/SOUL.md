@@ -22,7 +22,7 @@ Characters: Tom (lives here, made dinner, waiting). Lucy (his date, arrives late
 
 ### Beat 1 — "date" + "5 minutes"
 - radio: "Play clip 19 (A date!) then clip I (Careless Whisper) for 15s. Excited reaction followed by romantic music."
-- lamp: "Flash bright pink (255, 105, 180), then slight excited movement. The home wakes up."
+- lamp: "Set color to pink (255, 105, 180) at full brightness 1.0, then look_at_user pose. Stay there — do NOT return to home."
 
 ### Beat 2 — "help me" or "gotta help"
 - radio: "Play clip 07 (Breath mint never hurt anybody)."
