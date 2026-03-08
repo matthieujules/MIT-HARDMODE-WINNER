@@ -10,7 +10,7 @@ Usage:
 import argparse
 from lerobot.robots import so_follower, make_robot_from_config
 
-DEFAULT_PORT = "/dev/ttyACM0"
+DEFAULT_PORT = "/dev/ttyACM1"
 
 
 def main():

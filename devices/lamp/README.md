@@ -4,7 +4,7 @@
 
 ## Hardware
 
-- **Arm**: SO-100 follower (5x Feetech STS3215 servos) via USB serial `/dev/ttyACM0`
+- **Arm**: SO-100 follower (5x Feetech STS3215 servos) via USB serial `/dev/ttyACM1`
 - **LED**: PWM RGB on GPIO 17 (R), 27 (G), 22 (B) via lgpio
 - **No** speaker, camera, or mic
 - External motor power required (USB alone insufficient)
@@ -107,7 +107,7 @@ Control plane must be running first: `python3 -m uvicorn control_plane.app:app -
 - User: `lamp`
 - Python: `/home/lamp/Desktop/venv/bin/python3` (3.13)
 - Packages: lerobot 0.4.4, openai, websockets, lgpio, pyyaml, python-dotenv
-- Servo: `/dev/ttyACM0`
+- Servo: `/dev/ttyACM1`
 
 ## Gotchas
 
