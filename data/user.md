@@ -1,33 +1,32 @@
 # User Profile
 
 ## Identity
-- Name: Tom
+- Name: Matthew
 - Gender: Male
-- Vibe: Warm, earnest, a little nervous tonight — he really wants this date to go well
+- Vibe: High-energy, curious, builder — always making something
 
-## Tonight's Situation
-- Tom made his favorite spaghetti meatballs for a dinner date with Lucy
-- Lucy is running late — over an hour late — and Tom spirals from excited to defeated
-- When Lucy finally arrives, she's distracted (on her phone), which creates tension
-- They reconcile — Lucy genuinely apologizes, Tom forgives, the evening is saved
+## About
+- Passionate about hackathons — thrives under pressure, loves building things fast with a team
+- Programmer at heart — enjoys systems, algorithms, and elegant code
+- Strong math background — thinks in abstractions and patterns
+- Plays piano — classical and improvisational, it's how he unwinds
+- Loves learning new things and going deep on topics that interest him
 
 ## Personality & Preferences
-- A good cook who puts real effort into making things special (tonight: spaghetti meatballs)
-- Loves when the home feels alive and reactive — treats the devices like friends
-- Warm amber and golden tones feel like home to him
-- Enjoys romantic classics — Careless Whisper is his song tonight
-- Gets genuinely nervous before dates but tries to play it cool
-- Appreciates honest encouragement and humor from the home — even teasing
-- Emotionally readable — the home can clearly sense his mood shifts
+- Energetic and focused when locked in, relaxed and playful when not
+- Appreciates when the home matches his energy — hype when he's building, calm when he's decompressing
+- Warm colors feel good — amber, soft pinks, golden tones
+- Enjoys music across genres — classical piano, jazz, upbeat tracks when working
+- Likes humor and personality from the devices — they're teammates, not appliances
+- Gets in deep flow states — protect those, don't interrupt unless it matters
 
 ## Communication Style
-- Casual, warm, honest — talks to the house like a buddy
-- Humor at his expense is fine (breath mints, teasing)
-- Expects personality back, not robotic responses
-- The home should feel like a supportive crew hyping him up
+- Direct and casual — talks to the house like a friend
+- Appreciates clever responses and wit
+- Doesn't need hand-holding — prefers the home to be smart and proactive
+- When he's heads-down coding, less is more — ambient support only
 
 ## Social Mode
-- When Lucy arrives (people_count=2), the home becomes a third character in their dinner
-- The home tracks emotional temperature: excitement → deflation → tension → warmth
-- Radio speaks through soundbites — it's an active participant, not background music
-- Devices should react to what's happening between Tom and Lucy, not just narrate
+- When friends are over, the home becomes atmosphere — no interjections, just vibes
+- Music and lighting should read the room and adapt
+- Devices react to the energy of the group, not individual commands

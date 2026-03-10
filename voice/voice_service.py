@@ -139,11 +139,22 @@ def load_vad_model():
     import torch
 
     logger.info("Loading Silero VAD model...")
-    model, utils = torch.hub.load(
-        repo_or_dir="snakers4/silero-vad",
-        model="silero_vad",
-        trust_repo=True,
-    )
+    # Try local cache first (avoids GitHub API auth issues), fall back to remote
+    from pathlib import Path
+    local_cache = Path.home() / ".cache/torch/hub/snakers4_silero-vad_master"
+    if local_cache.exists():
+        model, utils = torch.hub.load(
+            source="local",
+            repo_or_dir=str(local_cache),
+            model="silero_vad",
+            trust_repo=True,
+        )
+    else:
+        model, utils = torch.hub.load(
+            repo_or_dir="snakers4/silero-vad",
+            model="silero_vad",
+            trust_repo=True,
+        )
     logger.info("Silero VAD loaded.")
     return model
 

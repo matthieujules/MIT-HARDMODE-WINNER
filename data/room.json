@@ -13,9 +13,10 @@
     {"id": "corner_zone", "label": "Corner", "x_cm": 432, "y_cm": 18, "w_cm": 46, "h_cm": 46, "type": "corner"}
   ],
   "anchors": {
-    "lamp": {"x_cm": 188, "y_cm": 120, "theta_deg": 35, "label": "Lamp"},
-    "mirror": {"x_cm": 252, "y_cm": 104, "theta_deg": 180, "label": "Frame"},
-    "radio": {"x_cm": 314, "y_cm": 122, "theta_deg": 270, "label": "Radio"}
+    "mirror": {"x_cm": 188, "y_cm": 104, "theta_deg": 180, "label": "Frame"},
+    "lamp": {"x_cm": 252, "y_cm": 120, "theta_deg": 35, "label": "Lamp"},
+    "radio": {"x_cm": 314, "y_cm": 122, "theta_deg": 270, "label": "Radio"},
+    "rover": {"x_cm": 370, "y_cm": 130, "theta_deg": 0, "label": "Rover"}
   },
   "sensor_mounts": {
     "global_camera": {"x_cm": 454, "y_cm": 336, "theta_deg": 225, "label": "Door Camera"},
